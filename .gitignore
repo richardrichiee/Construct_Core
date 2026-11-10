@@ -1,0 +1,102 @@
+# ==========================================
+# Flutter / Dart Official Gitignore
+# ==========================================
+
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+*.swo
+*~
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IDE & Editors
+*.iml
+*.ipr
+*.iws
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Flutter / Dart Build & Cache
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Web
+lib/generated_plugin_registrant.dart
+
+# Symbolication & Obfuscation
+app.*.symbols
+app.*.map.json
+
+# Android
+/android/app/debug
+/android/app/profile
+/android/app/release
+.gradle/
+android/.gradle/
+android/local.properties
+android/captures/
+android/key.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+*.jks
+*.keystore
+
+# iOS & macOS
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/app.flx
+**/ios/Flutter/app.zip
+**/ios/Flutter/flutter_assets/
+**/ios/ServiceDefinitions.json
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Environment & Secrets
+.env
+.env.*
+*.env
+
+# Screenshots and scratch images (protect app icons & assets)
+*.png
+*.jpg
+*.jpeg
+*.webp
+!**/res/**
+!**/Assets.xcassets/**
+!**/icons/**
+!**/assets/**

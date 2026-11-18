@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/storage/local_storage_service.dart';
 
 class SplashPage extends StatefulWidget {
@@ -43,12 +44,21 @@ class _SplashPageState extends State<SplashPage>
       final user = await LocalStorageService.getUser();
 
       if (isLoggedIn || user != null) {
-        if (user != null &&
-            (user.employeeId <= 0 ||
-                user.empCode == '0' ||
-                user.empCode == '0.0')) {
+        if (user != null && user.userId <= 0) {
           await LocalStorageService.clearUserSession();
           return '/login';
+        }
+        final expiredForNewDay =
+            await LocalStorageService.isSessionExpiredForNewDay();
+        if (expiredForNewDay) {
+          await LocalStorageService.invalidateSessionForNewDay();
+          return '/login?reason=daily_reauth';
+        }
+        if (user != null && user.isPunchNeeded) {
+          final isVerified = await LocalStorageService.isBiometricVerified();
+          if (!isVerified) {
+            return '/biometric-verify';
+          }
         }
         return '/dashboard';
       }
@@ -82,22 +92,22 @@ class _SplashPageState extends State<SplashPage>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // 1. Centered Ally One Dream Team Logo
+          // 1. Centered Construction App Logo
           Center(
             child: FadeTransition(
               opacity: _fadeAnimation,
               child: Image.asset(
-                'assets/images/ally_one_dream_team.png',
+                'assets/images/construction_logo.png',
                 width: 200,
                 fit: BoxFit.contain,
                 errorBuilder: (context, error, stackTrace) => Text(
-                  'Ally One\nDREAM TEAM',
+                  AppConstants.appName,
                   textAlign: TextAlign.center,
                   style: GoogleFonts.plusJakartaSans(
-                    fontSize: 22,
+                    fontSize: 24,
                     fontWeight: FontWeight.bold,
                     color: const Color(0xFF1E3A8A),
-                    letterSpacing: 1.0,
+                    letterSpacing: 0.6,
                   ),
                 ),
               ),

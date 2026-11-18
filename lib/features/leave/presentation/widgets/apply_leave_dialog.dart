@@ -1,18 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../../../app/theme/app_theme.dart';
+import '../../../../core/storage/local_storage_service.dart';
 import '../../../auth/data/models/user_rights_model.dart';
 import '../../../auth/data/services/user_rights_service.dart';
+import '../../../dashboard/data/models/menu_item_model.dart';
 import '../../data/services/leave_service.dart';
 
 class ApplyLeaveDialog extends StatefulWidget {
   final String? initialLeaveId;
   final String? initialLeaveName;
+  final double? initialBalance;
 
   const ApplyLeaveDialog({
     super.key,
     this.initialLeaveId,
     this.initialLeaveName,
+    this.initialBalance,
   });
 
   @override
@@ -34,6 +38,7 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
   double _calculatedDays = 1.0;
   bool _isCalculating = false;
   bool _isSubmitting = false;
+  bool _hasUserInteracted = false;
   String? _errorMessage;
   String? _calculationError;
 
@@ -47,12 +52,18 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
       }
     });
     _loadUserRights();
-    _triggerCalculation();
+    _triggerCalculation(showPopup: false);
   }
 
   Future<void> _loadUserRights() async {
     try {
-      final rights = await _userRightsService.fetchUserRights(menuCode: 19);
+      final leaveMenuCode = await LocalStorageService.getMenuCodeForModule(
+        MenuModuleType.leave,
+        fallback: 5105,
+      );
+      final rights = await _userRightsService.fetchUserRights(
+        menuCode: leaveMenuCode,
+      );
       if (mounted) {
         setState(() {
           _userRights = rights;
@@ -67,7 +78,7 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
     super.dispose();
   }
 
-  Future<void> _triggerCalculation() async {
+  Future<void> _triggerCalculation({bool showPopup = true}) async {
     setState(() {
       _isCalculating = true;
       _calculationError = null;
@@ -98,7 +109,7 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
         _isCalculating = false;
       });
 
-      if (errorText != null && errorText.isNotEmpty) {
+      if (showPopup && errorText != null && errorText.isNotEmpty) {
         _showWarningDialog(
           title: 'warning',
           message: errorText,
@@ -117,6 +128,7 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
 
     if (picked != null) {
       setState(() {
+        _hasUserInteracted = true;
         _errorMessage = null;
         _calculationError = null;
         if (isFromDate) {
@@ -133,6 +145,9 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
   }
 
   Future<void> _submitLeaveApplication() async {
+    if (!_hasUserInteracted) {
+      setState(() => _hasUserInteracted = true);
+    }
     if (_isCalculating) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -490,14 +505,35 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
                           color: categoryColor,
                         ),
                         const SizedBox(width: 10),
-                        Text(
-                          displayName,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: categoryColor,
+                        Expanded(
+                          child: Text(
+                            displayName,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: categoryColor,
+                            ),
                           ),
                         ),
+                        if (widget.initialBalance != null && widget.initialBalance! >= 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: categoryColor.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'Balance: ${(widget.initialBalance! % 1 == 0) ? widget.initialBalance!.toInt() : widget.initialBalance} Days',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: categoryColor,
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   );
@@ -530,6 +566,7 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
                 onChanged: (val) {
                   if (val != null) {
                     setState(() {
+                      _hasUserInteracted = true;
                       _errorMessage = null;
                       _calculationError = null;
                       _selectedLeaveType = val;
@@ -635,11 +672,11 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
                   vertical: 10,
                 ),
                 decoration: BoxDecoration(
-                  color: _calculationError != null
+                  color: (_hasUserInteracted && _calculationError != null)
                       ? const Color(0xFFFEF2F2)
                       : AppColors.primary.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(10),
-                  border: _calculationError != null
+                  border: (_hasUserInteracted && _calculationError != null)
                       ? Border.all(color: const Color(0xFFFCA5A5))
                       : null,
                 ),
@@ -665,7 +702,7 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
-                          color: _calculationError != null
+                          color: (_hasUserInteracted && _calculationError != null)
                               ? const Color(0xFFDC2626)
                               : AppColors.primary,
                         ),
@@ -692,7 +729,9 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
               ),
               const SizedBox(height: 18),
 
-              if (_calculationError != null && _calculationError!.isNotEmpty) ...[
+              if (_hasUserInteracted &&
+                  _calculationError != null &&
+                  _calculationError!.isNotEmpty) ...[
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -767,7 +806,9 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
                 width: double.infinity,
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: (_calculationError != null || _calculatedDays <= 0)
+                    backgroundColor:
+                        (_hasUserInteracted &&
+                            (_calculationError != null || _calculatedDays <= 0))
                         ? const Color(0xFF9CA3AF)
                         : AppColors.primary,
                   ),
@@ -782,7 +823,9 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
                           ),
                         )
                       : Text(
-                          (_calculationError != null || _calculatedDays <= 0)
+                          (_hasUserInteracted &&
+                                  (_calculationError != null ||
+                                      _calculatedDays <= 0))
                               ? 'Blocked: Leave Exceeded'
                               : 'Submit',
                           style: const TextStyle(

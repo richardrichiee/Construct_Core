@@ -4,6 +4,8 @@ class BranchModel {
   final double? latitude;
   final double? longitude;
   final double? radius;
+  final String? branchStartTime;
+  final String? branchEndTime;
 
   BranchModel({
     required this.value,
@@ -11,6 +13,8 @@ class BranchModel {
     this.latitude,
     this.longitude,
     this.radius,
+    this.branchStartTime,
+    this.branchEndTime,
   });
 
   int get id => value;
@@ -33,6 +37,10 @@ class BranchModel {
       latitude: _parseDouble(json['Latitude']),
       longitude: _parseDouble(json['Longitude']),
       radius: _parseDouble(json['Radius']),
+      branchStartTime: json['BranchStartTime']?.toString() ??
+          json['branchStartTime']?.toString(),
+      branchEndTime: json['BranchEndTime']?.toString() ??
+          json['branchEndTime']?.toString(),
     );
   }
 
@@ -43,6 +51,8 @@ class BranchModel {
       'Latitude': latitude,
       'Longitude': longitude,
       'Radius': radius,
+      if (branchStartTime != null) 'BranchStartTime': branchStartTime,
+      if (branchEndTime != null) 'BranchEndTime': branchEndTime,
     };
   }
 

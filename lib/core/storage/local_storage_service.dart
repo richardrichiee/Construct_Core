@@ -3,6 +3,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../features/auth/data/models/user_model.dart';
 import '../../features/dashboard/data/models/branch_model.dart';
+import '../../features/dashboard/data/models/menu_item_model.dart';
 import '../../features/attendance/data/models/last_attendance_model.dart';
 
 class LocalStorageService {
@@ -16,6 +17,9 @@ class LocalStorageService {
   static const String keyAccessId = 'key_access_id';
   static const String keyUserData = 'key_user_data';
   static const String keyIsLoggedIn = 'key_is_logged_in';
+  static const String keyLastLoginTimestamp = 'key_last_login_timestamp';
+  static const String keyBranchStartTime = 'branch_start_time';
+  static const String keyBranchEndTime = 'branch_end_time';
 
   static SharedPreferences? _prefs;
 
@@ -95,9 +99,43 @@ class LocalStorageService {
       final prefs = await _getPrefs();
       await prefs.setString(keyUserData, userJson);
       await prefs.setBool(keyIsLoggedIn, true);
+      await prefs.setString(keyBranchStartTime, user.branchStartTime);
+      await prefs.setString(keyBranchEndTime, user.branchEndTime);
       await _storage.write(key: keyUserData, value: userJson);
       await _storage.write(key: keyIsLoggedIn, value: 'true');
+      await _storage.write(key: keyBranchStartTime, value: user.branchStartTime);
+      await _storage.write(key: keyBranchEndTime, value: user.branchEndTime);
     } catch (_) {}
+  }
+
+  static Future<String> getBranchStartTime() async {
+    try {
+      final prefs = await _getPrefs();
+      final val = prefs.getString(keyBranchStartTime);
+      if (val != null && val.isNotEmpty) return val;
+      final secureVal = await _storage.read(key: keyBranchStartTime);
+      if (secureVal != null && secureVal.isNotEmpty) return secureVal;
+      final user = await getUser();
+      if (user != null && user.branchStartTime.isNotEmpty) {
+        return user.branchStartTime;
+      }
+    } catch (_) {}
+    return '08:00:00';
+  }
+
+  static Future<String> getBranchEndTime() async {
+    try {
+      final prefs = await _getPrefs();
+      final val = prefs.getString(keyBranchEndTime);
+      if (val != null && val.isNotEmpty) return val;
+      final secureVal = await _storage.read(key: keyBranchEndTime);
+      if (secureVal != null && secureVal.isNotEmpty) return secureVal;
+      final user = await getUser();
+      if (user != null && user.branchEndTime.isNotEmpty) {
+        return user.branchEndTime;
+      }
+    } catch (_) {}
+    return '18:00:00';
   }
 
   static Future<UserModel?> getUser() async {
@@ -173,10 +211,56 @@ class LocalStorageService {
       await prefs.remove(keyLastPunchTime);
       await prefs.remove(keyCachedBranches);
       await prefs.remove(keySelectedBranchId);
+      await prefs.remove(keyCachedMenus);
+      await prefs.remove(keyBiometricVerified);
+      await prefs.remove(keyLastLoginTimestamp);
+      await prefs.remove(keyBranchStartTime);
+      await prefs.remove(keyBranchEndTime);
       await _storage.delete(key: keyUserData);
       await _storage.delete(key: keyIsLoggedIn);
       await _storage.delete(key: keyOnlinePunchAnywhere);
+      await _storage.delete(key: keyLastLoginTimestamp);
+      await _storage.delete(key: keyBranchStartTime);
+      await _storage.delete(key: keyBranchEndTime);
+      await _storage.delete(key: keySessionPassword);
     } catch (_) {}
+  }
+
+  static Future<void> saveLoginTimestamp({DateTime? timestamp}) async {
+    try {
+      final prefs = await _getPrefs();
+      final value = (timestamp ?? DateTime.now()).toIso8601String();
+      await prefs.setString(keyLastLoginTimestamp, value);
+      await _storage.write(key: keyLastLoginTimestamp, value: value);
+    } catch (_) {}
+  }
+
+  static Future<DateTime?> getLoginTimestamp() async {
+    try {
+      final prefs = await _getPrefs();
+      var raw = prefs.getString(keyLastLoginTimestamp);
+      if (raw == null || raw.isEmpty) {
+        raw = await _storage.read(key: keyLastLoginTimestamp);
+      }
+      if (raw != null && raw.isNotEmpty) {
+        return DateTime.tryParse(raw)?.toLocal();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<bool> isSessionExpiredForNewDay({DateTime? now}) async {
+    final loginTime = await getLoginTimestamp();
+    if (loginTime == null) return true;
+    final current = (now ?? DateTime.now()).toLocal();
+    final isSameDay = loginTime.year == current.year &&
+        loginTime.month == current.month &&
+        loginTime.day == current.day;
+    return !isSameDay;
+  }
+
+  static Future<void> invalidateSessionForNewDay() async {
+    await clearUserSession();
   }
 
   static Future<String> _userSuffix([int? userId]) async {
@@ -333,6 +417,44 @@ class LocalStorageService {
 
   static const String keyCachedBranches = 'key_cached_branches';
   static const String keySelectedBranchId = 'key_selected_branch_id';
+  static const String keyCachedMenus = 'key_cached_menus';
+
+  static Future<void> saveMenus(List<MenuItemModel> menus) async {
+    try {
+      final prefs = await _getPrefs();
+      final listJson = jsonEncode(menus.map((m) => m.toJson()).toList());
+      await prefs.setString(keyCachedMenus, listJson);
+    } catch (_) {}
+  }
+
+  static Future<List<MenuItemModel>> getMenus() async {
+    try {
+      final prefs = await _getPrefs();
+      final jsonStr = prefs.getString(keyCachedMenus);
+      if (jsonStr != null && jsonStr.isNotEmpty) {
+        final List list = jsonDecode(jsonStr);
+        return list
+            .map((e) => MenuItemModel.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  static Future<int> getMenuCodeForModule(
+    MenuModuleType type, {
+    required int fallback,
+  }) async {
+    try {
+      final menus = await getMenus();
+      for (final item in menus) {
+        if (item.moduleType == type && item.value > 0) {
+          return item.value;
+        }
+      }
+    } catch (_) {}
+    return fallback;
+  }
 
   static Future<void> saveBranches(List<BranchModel> branches) async {
     try {
@@ -370,6 +492,149 @@ class LocalStorageService {
     } catch (_) {
       return null;
     }
+  }
+
+  static const String keyBiometricEnabled = 'key_biometric_enabled';
+  static const String keyBiometricOnlyMode = 'key_biometric_only_mode';
+  static const String keyBiometricLoginId = 'key_biometric_login_id';
+  static const String keyBiometricPassword = 'key_biometric_password';
+  static const String keyBiometricVerified = 'key_biometric_verified';
+  static const String keySessionPassword = 'key_session_password';
+
+  static Future<void> saveSessionPassword(String password) async {
+    try {
+      await _storage.write(key: keySessionPassword, value: password);
+    } catch (_) {}
+  }
+
+  static Future<String?> getSessionPassword() async {
+    try {
+      final pw = await _storage.read(key: keySessionPassword);
+      if (pw != null && pw.isNotEmpty) return pw;
+      final bioPw = await _storage.read(key: keyBiometricPassword);
+      if (bioPw != null && bioPw.isNotEmpty) return bioPw;
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<void> setBiometricOnlyMode(bool enabled) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.setBool(keyBiometricOnlyMode, enabled);
+      await _storage.write(
+        key: keyBiometricOnlyMode,
+        value: enabled ? 'true' : 'false',
+      );
+    } catch (_) {}
+  }
+
+  static Future<bool> isBiometricOnlyMode() async {
+    try {
+      final prefs = await _getPrefs();
+      if (prefs.containsKey(keyBiometricOnlyMode)) {
+        return prefs.getBool(keyBiometricOnlyMode) ?? false;
+      }
+      final val = await _storage.read(key: keyBiometricOnlyMode);
+      return val == 'true';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> activateBiometricLockAfterVerification() async {
+    try {
+      final creds = await getBiometricCredentials();
+      if (creds == null) return;
+      await setBiometricEnabled(true);
+      await setBiometricOnlyMode(true);
+    } catch (_) {}
+  }
+
+  static Future<void> setBiometricVerified(bool verified) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.setBool(keyBiometricVerified, verified);
+    } catch (_) {}
+  }
+
+  static Future<bool> isBiometricVerified() async {
+    try {
+      final prefs = await _getPrefs();
+      return prefs.getBool(keyBiometricVerified) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> setBiometricEnabled(bool enabled) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.setBool(keyBiometricEnabled, enabled);
+      await _storage.write(
+        key: keyBiometricEnabled,
+        value: enabled ? 'true' : 'false',
+      );
+      if (!enabled) {
+        await setBiometricOnlyMode(false);
+        await _storage.delete(key: keyBiometricLoginId);
+        await _storage.delete(key: keyBiometricPassword);
+      }
+    } catch (_) {}
+  }
+
+  static Future<bool> isBiometricEnabled() async {
+    try {
+      final prefs = await _getPrefs();
+      if (prefs.containsKey(keyBiometricEnabled)) {
+        return prefs.getBool(keyBiometricEnabled) ?? false;
+      }
+      final val = await _storage.read(key: keyBiometricEnabled);
+      return val == 'true';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> saveBiometricCredentials({
+    required String loginId,
+    required String password,
+  }) async {
+    try {
+      await _storage.write(key: keyBiometricLoginId, value: loginId);
+      await _storage.write(key: keyBiometricPassword, value: password);
+    } catch (_) {}
+  }
+
+  static Future<({String loginId, String password})?>
+      getBiometricCredentials() async {
+    try {
+      final loginId = await _storage.read(key: keyBiometricLoginId);
+      final password = await _storage.read(key: keyBiometricPassword);
+      if (loginId != null &&
+          loginId.isNotEmpty &&
+          password != null &&
+          password.isNotEmpty) {
+        return (loginId: loginId, password: password);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<void> updateBiometricPasswordIfEnabled(
+    String newPassword,
+  ) async {
+    try {
+      final enabled = await isBiometricEnabled();
+      if (!enabled) return;
+      final loginId = await _storage.read(key: keyBiometricLoginId);
+      if (loginId != null && loginId.isNotEmpty) {
+        await _storage.write(key: keyBiometricPassword, value: newPassword);
+      }
+    } catch (_) {}
+  }
+
+  static Future<void> clearBiometricCredentials() async {
+    await setBiometricEnabled(false);
   }
 
   static Future<void> clearAll() async {

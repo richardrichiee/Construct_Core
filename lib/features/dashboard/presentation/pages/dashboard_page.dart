@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 
 import '../../../../app/theme/app_theme.dart';
@@ -14,8 +15,10 @@ import '../../../profile/data/services/employee_service.dart';
 import '../../../profile/data/models/employee_details_model.dart';
 import '../../data/models/branch_model.dart';
 import '../../data/models/financial_year_model.dart';
+import '../../data/models/menu_item_model.dart';
 import '../../data/services/branch_service.dart';
 import '../../data/services/financial_year_service.dart';
+import '../../data/services/menu_service.dart';
 import '../../data/services/notification_service.dart';
 import '../../../leave/data/services/leave_service.dart';
 import '../../../auth/data/services/access_point_service.dart';
@@ -37,9 +40,14 @@ class _DashboardPageState extends State<DashboardPage> {
   final _employeeService = EmployeeService();
   final _attendanceService = AttendanceService();
   final _notificationService = NotificationService();
+  final _menuService = MenuService();
 
   bool _isCheckedIn = false;
   bool _isLocationChecking = false;
+  bool _isMenuLoading = true;
+  bool _hasResolvedUser = false;
+  bool _hasLinkedEmployee = false;
+  List<MenuItemModel> _menuItems = [];
   String _checkInTime = '--:--';
   String _checkOutTime = '';
   String _rawCheckInTime = '';
@@ -75,12 +83,18 @@ class _DashboardPageState extends State<DashboardPage> {
     // 1. Immediately show cached user info, cached branches & selected branch
     final user = await LocalStorageService.getUser();
     final cachedBranches = await LocalStorageService.getBranches();
+    final cachedMenus = await LocalStorageService.getMenus();
     final savedBranchId = await LocalStorageService.getSelectedBranchId();
     final cachedCompanyLogo = await LocalStorageService.getCompanyImageUrl();
     await LocalStorageService.clearPunchCache();
 
     if (mounted) {
       setState(() {
+        _hasResolvedUser = true;
+        _hasLinkedEmployee = (user?.employeeId ?? 0) > 0;
+        if (cachedMenus.isNotEmpty && _menuItems.isEmpty) {
+          _menuItems = cachedMenus;
+        }
         if (cachedCompanyLogo != null && cachedCompanyLogo.isNotEmpty) {
           _companyImageUrl = cachedCompanyLogo;
         }
@@ -115,8 +129,23 @@ class _DashboardPageState extends State<DashboardPage> {
     }
 
     final leaveService = LeaveService();
-    final branchId = _selectedBranch?.id ?? savedBranchId ?? 1;
     final empId = user?.employeeId;
+
+    // Resolve branches first on fresh login (when no branch is cached/selected yet)
+    // so fetchLastAttendance & fetchHistoryAttendance use the user's real BranchID
+    // instead of defaulting to 1 (which caused Check-In to show after logout -> login).
+    List<BranchModel>? prefetchedBranches;
+    int? resolvedBranchId = _selectedBranch?.id ?? savedBranchId;
+    if (resolvedBranchId == null || resolvedBranchId <= 0) {
+      try {
+        prefetchedBranches = await _branchService.fetchBranches();
+        if (prefetchedBranches.isNotEmpty) {
+          resolvedBranchId = prefetchedBranches.first.id;
+          await LocalStorageService.saveSelectedBranchId(resolvedBranchId);
+        }
+      } catch (_) {}
+    }
+    final branchId = resolvedBranchId ?? 1;
 
     // 2. Fetch all dashboard data concurrently in parallel using Future.wait
     try {
@@ -124,7 +153,9 @@ class _DashboardPageState extends State<DashboardPage> {
         _employeeService.fetchEmployeeDashboard(date: formattedDate),
         _notificationService.fetchNotificationCount(),
         leaveService.fetchDashboardLeaves(date: formattedDate),
-        _branchService.fetchBranches(),
+        prefetchedBranches != null
+            ? Future.value(prefetchedBranches)
+            : _branchService.fetchBranches(),
         _financialYears.isEmpty
             ? _financialYearService.fetchFinancialYears()
             : Future.value(_financialYears),
@@ -137,6 +168,7 @@ class _DashboardPageState extends State<DashboardPage> {
           branchId: branchId,
           employeeId: empId,
         ),
+        _menuService.fetchMenus(),
       ]);
 
       if (!mounted) return;
@@ -147,10 +179,67 @@ class _DashboardPageState extends State<DashboardPage> {
       final branches = results[3] as List<BranchModel>;
       final financialYears = results[4] as List<FinancialYearModel>;
       final attendanceLogs = results[5] as List<AttendanceLogModel>;
-      final lastAttendance = results[6] as LastAttendanceModel?;
-      final historyAttendance = (results.length > 7 && results[7] is List)
+      var lastAttendance = results[6] as LastAttendanceModel?;
+      var historyAttendance = (results.length > 7 && results[7] is List)
           ? results[7] as List<LastAttendanceModel>
           : <LastAttendanceModel>[];
+      final menus = (results.length > 8 && results[8] is List<MenuItemModel>)
+          ? results[8] as List<MenuItemModel>
+          : <MenuItemModel>[];
+
+      // Determine final selected branch
+      BranchModel? finalSelectedBranch = _selectedBranch;
+      if (savedBranchId != null && branches.isNotEmpty) {
+        finalSelectedBranch = branches.firstWhere(
+          (b) => b.value == savedBranchId,
+          orElse: () => branches.first,
+        );
+      } else if (finalSelectedBranch == null && branches.isNotEmpty) {
+        finalSelectedBranch = branches.first;
+      } else if (finalSelectedBranch != null && branches.isNotEmpty) {
+        finalSelectedBranch = branches.firstWhere(
+          (b) => b.value == finalSelectedBranch!.value,
+          orElse: () => finalSelectedBranch!,
+        );
+      }
+
+      // If attendance wasn't found for the initial branchId, check the resolved branch
+      // (or other assigned branches after fresh login in case the user checked in on another branch)
+      if (historyAttendance.isEmpty &&
+          (lastAttendance == null || lastAttendance.inOutTime.isEmpty) &&
+          empId != null &&
+          empId > 0 &&
+          branches.isNotEmpty) {
+        final candidateBranches = branches
+            .where((b) => b.id != branchId)
+            .toList();
+        for (final candidate in candidateBranches) {
+          final altResults = await Future.wait([
+            _attendanceService.fetchLastAttendance(
+              branchId: candidate.id,
+              employeeId: empId,
+            ),
+            _attendanceService.fetchHistoryAttendance(
+              branchId: candidate.id,
+              employeeId: empId,
+            ),
+          ]);
+          final altLast = altResults[0] as LastAttendanceModel?;
+          final altHistory = altResults[1] as List<LastAttendanceModel>;
+          if (altHistory.isNotEmpty ||
+              (altLast != null && altLast.inOutTime.isNotEmpty)) {
+            lastAttendance = altLast;
+            historyAttendance = altHistory;
+            if (savedBranchId == null) {
+              finalSelectedBranch = candidate;
+              await LocalStorageService.saveSelectedBranchId(candidate.id);
+            }
+            break;
+          }
+        }
+      }
+
+      if (!mounted) return;
 
       final summaryItems = <LeaveSummaryItem>[];
       final distinctColors = [
@@ -184,19 +273,19 @@ class _DashboardPageState extends State<DashboardPage> {
       } else if (dashboardLeaves.isNotEmpty) {
         for (final item in dashboardLeaves) {
           final name = item['LeaveName']?.toString() ?? 'Leave';
-          final total =
+          final empCount =
               (item['EmployeesTakenLeave'] as num?)?.toDouble() ?? 0.0;
-          final taken = (item['TotalLeaveDays'] as num?)?.toDouble() ?? 0.0;
-          final balance = (total - taken) >= 0 ? (total - taken) : 0.0;
+          final totalDays = (item['TotalLeaveDays'] as num?)?.toDouble() ?? 0.0;
+          final days = totalDays > 0 ? totalDays : empCount;
           final color = distinctColors[colorIdx % distinctColors.length];
           colorIdx++;
 
           summaryItems.add(
             LeaveSummaryItem(
               leaveName: name,
-              totalLeaves: total,
-              employeesTaken: taken,
-              balanceLeaves: balance,
+              totalLeaves: days,
+              employeesTaken: empCount,
+              balanceLeaves: days,
               color: color,
             ),
           );
@@ -206,6 +295,8 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() {
         _notificationCount = notifCount;
         _leaveSummaryItems = summaryItems;
+        _menuItems = menus;
+        _isMenuLoading = false;
 
         if (employeeDetails != null) {
           _userName = employeeDetails.name;
@@ -220,19 +311,7 @@ class _DashboardPageState extends State<DashboardPage> {
             : 'U';
 
         _branches = branches;
-        if (savedBranchId != null && _branches.isNotEmpty) {
-          _selectedBranch = _branches.firstWhere(
-            (b) => b.value == savedBranchId,
-            orElse: () => _branches.first,
-          );
-        } else if (_selectedBranch == null && _branches.isNotEmpty) {
-          _selectedBranch = _branches.first;
-        } else if (_selectedBranch != null && _branches.isNotEmpty) {
-          _selectedBranch = _branches.firstWhere(
-            (b) => b.value == _selectedBranch!.value,
-            orElse: () => _selectedBranch!,
-          );
-        }
+        _selectedBranch = finalSelectedBranch;
 
         _financialYears = financialYears;
         if (_selectedFinancialYear == null && _financialYears.isNotEmpty) {
@@ -349,7 +428,13 @@ class _DashboardPageState extends State<DashboardPage> {
         // Apply first check-in and last check-out from today's history
         _applyAttendanceFromHistory(historyAttendance, lastAttendance);
       });
-    } catch (_) {}
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isMenuLoading = false;
+        });
+      }
+    }
   }
 
   void _applyAttendanceFromHistory(
@@ -558,7 +643,18 @@ class _DashboardPageState extends State<DashboardPage> {
 
     // Refresh branch data from local storage to ensure fresh coordinates
     final user = await LocalStorageService.getUser();
-    final punchAnywhereFlag = await LocalStorageService.getOnlinePunchAnywhere();
+    if ((user?.employeeId ?? 0) <= 0) {
+      _showLocationDialog(
+        title: 'Employee Profile Not Linked',
+        message:
+            'Your account does not have an Employee ID linked for mobile attendance.',
+        icon: Icons.badge_outlined,
+        iconColor: Colors.orange,
+      );
+      return;
+    }
+    final punchAnywhereFlag =
+        await LocalStorageService.getOnlinePunchAnywhere();
     final canPunchAnywhere =
         (user?.canPunchAnywhere ?? false) || punchAnywhereFlag == 1;
 
@@ -578,7 +674,9 @@ class _DashboardPageState extends State<DashboardPage> {
       branch = _selectedBranch;
     }
 
-    branch ??= (cachedBranches.isNotEmpty ? cachedBranches.first : _selectedBranch);
+    branch ??= (cachedBranches.isNotEmpty
+        ? cachedBranches.first
+        : _selectedBranch);
 
     if (branch != null) {
       _selectedBranch = branch;
@@ -663,7 +761,9 @@ class _DashboardPageState extends State<DashboardPage> {
         }
 
         if (permission == LocationPermission.deniedForever) {
-          debugPrint('❌ [CheckIn Error] Location permission permanently denied');
+          debugPrint(
+            '❌ [CheckIn Error] Location permission permanently denied',
+          );
           if (!mounted) return;
           _showLocationDialog(
             title: 'Permission Permanently Denied',
@@ -767,7 +867,9 @@ class _DashboardPageState extends State<DashboardPage> {
           return;
         }
 
-        debugPrint('✅ [CheckIn] Geofence check PASSED! Preparing punch data...');
+        debugPrint(
+          '✅ [CheckIn] Geofence check PASSED! Preparing punch data...',
+        );
       } else {
         debugPrint(
           '🚀 [CheckIn] OnlinePunchAnywhere is ENABLED (flag = 1). Geofence check bypassed! Capturing GPS coordinates if available...',
@@ -817,15 +919,14 @@ class _DashboardPageState extends State<DashboardPage> {
         timeFlag: newFlag,
       ).formattedTime;
       final dateFormatted = DateFormat('dd/MM/yyyy').format(now);
-      final empId = user?.employeeId ?? 1;
-      final accessPoint =
-          await LocalStorageService.getAccessPoint() ?? '';
+      final empId = user!.employeeId;
+      final accessPoint = await LocalStorageService.getAccessPoint() ?? '';
       final branchId = branch.id;
       final branchName = branch.name;
 
       debugPrint('[CheckIn] Access Point: $accessPoint');
       debugPrint(
-        '[CheckIn] User: userId=${user?.userId}, employeeId=$empId, userName=${user?.userName}',
+        '[CheckIn] User: userId=${user.userId}, employeeId=$empId, userName=${user.userName}',
       );
       debugPrint(
         '[CheckIn] Punch Parameters: inOutTime=$timeStr, timeFlag=$newFlag, date=$dateFormatted, branchId=$branchId',
@@ -919,11 +1020,11 @@ class _DashboardPageState extends State<DashboardPage> {
 
       final successText = canPunchAnywhere
           ? (_isCheckedIn
-              ? 'Checked in successfully (Online)!'
-              : 'Checked out successfully (Online)!')
+                ? 'Checked in successfully (Online)!'
+                : 'Checked out successfully (Online)!')
           : (_isCheckedIn
-              ? 'Checked in successfully at $branchName!'
-              : 'Checked out successfully at $branchName!');
+                ? 'Checked in successfully at $branchName!'
+                : 'Checked out successfully at $branchName!');
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -935,9 +1036,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 size: 20,
               ),
               const SizedBox(width: 10),
-              Expanded(
-                child: Text(successText),
-              ),
+              Expanded(child: Text(successText)),
             ],
           ),
           backgroundColor: AppColors.success,
@@ -1066,174 +1165,34 @@ class _DashboardPageState extends State<DashboardPage> {
   void _showHeaderPicker() {
     showModalBottomSheet(
       context: context,
+      useRootNavigator: true,
+      useSafeArea: true,
       isScrollControlled: true,
+      backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setBottomSheetState) {
-            return SafeArea(
-              top: false,
-              child: Padding(
-                padding: EdgeInsets.only(
-                  left: 20,
-                  right: 20,
-                  top: 20,
-                  bottom: MediaQuery.of(context).padding.bottom + 20,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Office & Financial Year Configuration',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Branch Section
-                    const Text(
-                      'Branch',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textMuted,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    if (_branches.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 8),
-                        child: Text(
-                          'No branches available',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: AppColors.textMuted,
-                          ),
-                        ),
-                      )
-                    else
-                      ..._branches.map((branch) {
-                        final isSelected =
-                            branch.value == _selectedBranch?.value;
-                        return ListTile(
-                          dense: true,
-                          leading: Icon(
-                            Icons.business_rounded,
-                            color: isSelected
-                                ? AppColors.primary
-                                : AppColors.textMuted,
-                          ),
-                          title: Text(
-                            branch.name,
-                            style: TextStyle(
-                              fontWeight: isSelected
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
-                              color: isSelected
-                                  ? AppColors.primary
-                                  : AppColors.textPrimary,
-                            ),
-                          ),
-                          trailing: isSelected
-                              ? const Icon(
-                                  Icons.check_circle,
-                                  color: AppColors.primary,
-                                )
-                              : null,
-                          onTap: () {
-                            setState(() {
-                              _selectedBranch = branch;
-                            });
-                            LocalStorageService.saveSelectedBranchId(
-                              branch.value,
-                            );
-                            setBottomSheetState(() {});
-                            _fetchAndApplyLastAttendance();
-                          },
-                        );
-                      }),
-
-                    const Divider(height: 24),
-
-                    // Financial Year Section
-                    const Text(
-                      'Financial Year',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textMuted,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    if (_financialYears.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 8),
-                        child: Text(
-                          'No financial years available',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: AppColors.textMuted,
-                          ),
-                        ),
-                      )
-                    else
-                      ..._financialYears.map((fy) {
-                        final isSelected =
-                            fy.value == _selectedFinancialYear?.value;
-                        return ListTile(
-                          dense: true,
-                          leading: Icon(
-                            Icons.calendar_today_rounded,
-                            color: isSelected
-                                ? AppColors.primary
-                                : AppColors.textMuted,
-                          ),
-                          title: Text(
-                            fy.name,
-                            style: TextStyle(
-                              fontWeight: isSelected
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
-                              color: isSelected
-                                  ? AppColors.primary
-                                  : AppColors.textPrimary,
-                            ),
-                          ),
-                          trailing: isSelected
-                              ? const Icon(
-                                  Icons.check_circle,
-                                  color: AppColors.primary,
-                                )
-                              : null,
-                          onTap: () {
-                            setState(() {
-                              _selectedFinancialYear = fy;
-                            });
-                            setBottomSheetState(() {});
-                          },
-                        );
-                      }),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          _loadInitialData();
-                        },
-                        child: const Text('Apply Changes'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
+      builder: (sheetContext) {
+        return _HeaderConfigSheet(
+          branches: _branches,
+          selectedBranch: _selectedBranch,
+          financialYears: _financialYears,
+          selectedFinancialYear: _selectedFinancialYear,
+          onBranchSelected: (branch) {
+            setState(() {
+              _selectedBranch = branch;
+            });
+            LocalStorageService.saveSelectedBranchId(branch.value);
+            _fetchAndApplyLastAttendance();
+          },
+          onFinancialYearSelected: (fy) {
+            setState(() {
+              _selectedFinancialYear = fy;
+            });
+          },
+          onApply: () {
+            Navigator.pop(sheetContext);
+            _loadInitialData();
           },
         );
       },
@@ -1554,36 +1513,78 @@ class _DashboardPageState extends State<DashboardPage> {
                         context.go('/dashboard');
                       },
                     ),
-                    _buildDrawerTile(
-                      icon: Icons.calendar_today_rounded,
-                      title: 'Leave Management',
-                      isActive: false,
-                      iconBg: const Color(0xFFFEF3C7),
-                      iconColor: const Color(0xFFD97706),
-                      onTap: () {
-                        Navigator.pop(context);
-                        context.push('/leave');
-                      },
-                    ),
-                    _buildDrawerTile(
-                      icon: Icons.receipt_long_rounded,
-                      title: 'Claims & Expenses',
-                      isActive: false,
-                      iconBg: const Color(0xFFEDE9FE),
-                      iconColor: const Color(0xFF7C3AED),
-                      onTap: () {
-                        Navigator.pop(context);
-                        context.push('/claims');
-                      },
-                    ),
+                    if (_isMenuLoading && _menuItems.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 20),
+                        child: Center(
+                          child: SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                      )
+                    else if (_menuItems.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 16,
+                        ),
+                        child: Row(
+                          children: [
+                            const Expanded(
+                              child: Text(
+                                'No modules assigned',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: _refreshMenus,
+                              icon: const Icon(
+                                Icons.refresh_rounded,
+                                size: 18,
+                                color: AppColors.primary,
+                              ),
+                              tooltip: 'Reload menu',
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      ..._menuItems
+                          .where(
+                            (m) =>
+                                m.moduleType !=
+                                MenuModuleType.leaveCancellation,
+                          )
+                          .map(_buildDynamicMenuTile),
+                    if (!_menuItems.any(
+                      (m) => m.moduleType == MenuModuleType.attendance,
+                    ))
+                      _buildDrawerTile(
+                        icon: Icons.access_time_filled_rounded,
+                        title: 'Daily Attendance',
+                        isActive: false,
+                        iconBg: const Color(0xFFECFDF5),
+                        iconColor: const Color(0xFF059669),
+                        onTap: () {
+                          Navigator.pop(context);
+                          context.push('/daily-attendance');
+                        },
+                      ),
                   ],
                 ),
               ),
 
               // Bottom Logout & Version Footer
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                child: Column(
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: Column(
                   children: [
                     Material(
                       color: Colors.transparent,
@@ -1655,6 +1656,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   ],
                 ),
               ),
+              ),
             ],
           ),
         ),
@@ -1662,326 +1664,341 @@ class _DashboardPageState extends State<DashboardPage> {
       body: RefreshIndicator(
         onRefresh: _loadInitialData,
         child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 1. Warm Greeting Section
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          'Welcome, $_userName',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
-                            letterSpacing: -0.3,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(
-                          color: AppColors.secondary,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (_userDesignation.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      _userDesignation,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              // 2. Hero Punch & Today's Attendance Card
-              Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: AppColors.cardBorder),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF0F172A).withValues(alpha: 0.06),
-                      blurRadius: 14,
-                      offset: const Offset(0, 4),
-                    ),
-                    BoxShadow(
-                      color: const Color(0xFF0F172A).withValues(alpha: 0.02),
-                      blurRadius: 4,
-                      offset: const Offset(0, 1),
-                    ),
-                  ],
-                ),
-                child: Column(
+          child: !_hasResolvedUser
+              ? const SizedBox.shrink()
+              : Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      crossAxisAlignment: CrossAxisAlignment.center,
+                    // 1. Warm Greeting Section
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Left: Today's In Time Info
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    width: 7,
-                                    height: 7,
-                                    decoration: BoxDecoration(
-                                      color: _isCheckedIn
-                                          ? AppColors.secondary
-                                          : (todayOutTime.isNotEmpty
-                                                ? Colors.orange
-                                                : AppColors.textMuted),
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Flexible(
-                                    child: Text(
-                                      _isCheckedIn
-                                          ? "Today's Check In"
-                                          : (todayOutTime.isNotEmpty
-                                                ? "Today's Check Out"
-                                                : "Today's Check In"),
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: AppColors.textSecondary,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 2),
-                              FittedBox(
-                                fit: BoxFit.scaleDown,
-                                alignment: Alignment.centerLeft,
-                                child: Text(
-                                  _isCheckedIn
-                                      ? todayInTime
-                                      : (todayOutTime.isNotEmpty
-                                            ? todayOutTime
-                                            : todayInTime),
-                                  maxLines: 1,
-                                  style: const TextStyle(
-                                    fontSize: 24,
-                                    fontWeight: FontWeight.bold,
-                                    color: AppColors.textPrimary,
-                                    letterSpacing: -0.5,
-                                  ),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                'Welcome, $_userName',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.textPrimary,
+                                  letterSpacing: -0.3,
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              InkWell(
-                                onTap: _showTodayPunchHistory,
-                                borderRadius: BorderRadius.circular(6),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 2.0,
-                                  ),
-                                  child: FittedBox(
-                                    fit: BoxFit.scaleDown,
-                                    alignment: Alignment.centerLeft,
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: const [
-                                        Text(
-                                          'Tap to view punch history',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
-                                            color: AppColors.primary,
+                            ),
+                            const SizedBox(width: 6),
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: const BoxDecoration(
+                                color: AppColors.secondary,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_userDesignation.isNotEmpty) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            _userDesignation,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+
+                    if (_hasLinkedEmployee) ...[
+                      const SizedBox(height: 16),
+
+                      // 2. Hero Punch & Today's Attendance Card
+                      Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: AppColors.cardBorder),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(
+                                0xFF0F172A,
+                              ).withValues(alpha: 0.06),
+                              blurRadius: 14,
+                              offset: const Offset(0, 4),
+                            ),
+                            BoxShadow(
+                              color: const Color(
+                                0xFF0F172A,
+                              ).withValues(alpha: 0.02),
+                              blurRadius: 4,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                // Left: Today's In Time Info
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Container(
+                                            width: 7,
+                                            height: 7,
+                                            decoration: BoxDecoration(
+                                              color: _isCheckedIn
+                                                  ? AppColors.secondary
+                                                  : (todayOutTime.isNotEmpty
+                                                        ? Colors.orange
+                                                        : AppColors.textMuted),
+                                              shape: BoxShape.circle,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Flexible(
+                                            child: Text(
+                                              _isCheckedIn
+                                                  ? "Today's Check In"
+                                                  : (todayOutTime.isNotEmpty
+                                                        ? "Today's Check Out"
+                                                        : "Today's Check In"),
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                color: AppColors.textSecondary,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 2),
+                                      FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          _isCheckedIn
+                                              ? todayInTime
+                                              : (todayOutTime.isNotEmpty
+                                                    ? todayOutTime
+                                                    : todayInTime),
+                                          maxLines: 1,
+                                          style: const TextStyle(
+                                            fontSize: 24,
+                                            fontWeight: FontWeight.bold,
+                                            color: AppColors.textPrimary,
+                                            letterSpacing: -0.5,
                                           ),
                                         ),
-                                        SizedBox(width: 3),
-                                        Icon(
-                                          Icons.arrow_forward_rounded,
-                                          size: 14,
-                                          color: AppColors.primary,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      InkWell(
+                                        onTap: _showTodayPunchHistory,
+                                        borderRadius: BorderRadius.circular(6),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 2.0,
+                                          ),
+                                          child: FittedBox(
+                                            fit: BoxFit.scaleDown,
+                                            alignment: Alignment.centerLeft,
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: const [
+                                                Text(
+                                                  'Tap to view punch history',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: AppColors.primary,
+                                                  ),
+                                                ),
+                                                SizedBox(width: 3),
+                                                Icon(
+                                                  Icons.arrow_forward_rounded,
+                                                  size: 14,
+                                                  color: AppColors.primary,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
                                         ),
-                                      ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+
+                                // Right: Punch Action Button
+                                // Right: Punch Action Button
+                                ElevatedButton.icon(
+                                  onPressed: _isLocationChecking
+                                      ? null
+                                      : _toggleCheckIn,
+                                  icon: _isLocationChecking
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : Icon(
+                                          _isCheckedIn
+                                              ? Icons.logout_rounded
+                                              : Icons.login_rounded,
+                                          size: 18,
+                                        ),
+                                  label: Text(
+                                    _isLocationChecking
+                                        ? 'Verifying...'
+                                        : (_isCheckedIn
+                                              ? 'Check Out'
+                                              : 'Check In'),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
                                     ),
                                   ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _isCheckedIn
+                                        ? AppColors.error
+                                        : AppColors.primary,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                    shadowColor: Colors.transparent,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 20,
+                                      vertical: 12,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+
+                            // Verification Status Chip - ONLY show when user is checked in
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+
+                      // 3. Overview Header & Date Selector Pill
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              const Text(
+                                'Overview',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.textPrimary,
                                 ),
                               ),
                             ],
                           ),
-                        ),
-                        const SizedBox(width: 12),
-
-                        // Right: Punch Action Button
-                        // Right: Punch Action Button
-                        ElevatedButton.icon(
-                          onPressed: _isLocationChecking
-                              ? null
-                              : _toggleCheckIn,
-                          icon: _isLocationChecking
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _selectDashboardDate,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: AppColors.cardBorder),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(
+                                      0xFF0F172A,
+                                    ).withValues(alpha: 0.05),
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 2),
                                   ),
-                                )
-                              : Icon(
-                                  _isCheckedIn
-                                      ? Icons.logout_rounded
-                                      : Icons.login_rounded,
-                                  size: 18,
-                                ),
-                          label: Text(
-                            _isLocationChecking
-                                ? 'Verifying...'
-                                : (_isCheckedIn ? 'Check Out' : 'Check In'),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
+                                ],
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.calendar_month_rounded,
+                                    size: 15,
+                                    color: AppColors.primary,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    DateFormat(
+                                      'MMM yyyy',
+                                    ).format(_selectedDate),
+                                    style: const TextStyle(
+                                      color: AppColors.textPrimary,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Icon(
+                                    Icons.expand_more_rounded,
+                                    size: 16,
+                                    color: AppColors.textMuted,
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _isCheckedIn
-                                ? AppColors.error
-                                : AppColors.primary,
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            shadowColor: Colors.transparent,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 12,
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
 
-                    // Verification Status Chip - ONLY show when user is checked in
+                      // 4. Metric Cards Row (Attendance & Leaves Taken)
+                      DashboardMetrics(
+                        attendanceCount: _attendanceCount,
+                        leavesTakenCount: _leavesCount,
+                      ),
+                      const SizedBox(height: 16),
+
+                      // 5. Attendance Monthly Calendar
+                      AttendanceCalendarWidget(
+                        liveDayStatus: _liveDayStatus,
+                        liveDayDetails: _liveDayDetails,
+                        selectedDate: _selectedDate,
+                        onDateSelected: (date) {
+                          setState(() {
+                            _selectedDate = date;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 16),
+
+                      // 6. Leave Balance Overview (Donut Chart / Table View)
+                      LeaveBalanceChart(items: _leaveSummaryItems),
+                      const SizedBox(height: 24),
+                    ],
                   ],
                 ),
-              ),
-              const SizedBox(height: 18),
-
-              // 3. Overview Header & Date Selector Pill
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      const Text(
-                        'Overview',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ],
-                  ),
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: _selectDashboardDate,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: AppColors.cardBorder),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(
-                              0xFF0F172A,
-                            ).withValues(alpha: 0.05),
-                            blurRadius: 6,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.calendar_month_rounded,
-                            size: 15,
-                            color: AppColors.primary,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            DateFormat('MMM yyyy').format(_selectedDate),
-                            style: const TextStyle(
-                              color: AppColors.textPrimary,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          const Icon(
-                            Icons.expand_more_rounded,
-                            size: 16,
-                            color: AppColors.textMuted,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              // 4. Metric Cards Row (Attendance & Leaves Taken)
-              DashboardMetrics(
-                attendanceCount: _attendanceCount,
-                leavesTakenCount: _leavesCount,
-              ),
-              const SizedBox(height: 16),
-
-              // 5. Attendance Monthly Calendar
-              AttendanceCalendarWidget(
-                liveDayStatus: _liveDayStatus,
-                liveDayDetails: _liveDayDetails,
-                selectedDate: _selectedDate,
-                onDateSelected: (date) {
-                  setState(() {
-                    _selectedDate = date;
-                  });
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // 6. Leave Balance Overview (Donut Chart / Table View)
-              LeaveBalanceChart(items: _leaveSummaryItems),
-              const SizedBox(height: 24),
-            ],
-          ),
         ),
       ),
     );
@@ -1990,59 +2007,115 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget _buildAppBarLogo(BuildContext context) {
     return GestureDetector(
       onTap: () => Scaffold.of(context).openDrawer(),
-      child: _companyImageUrl != null && _companyImageUrl!.isNotEmpty
-          ? Container(
-              height: 36,
-              constraints: const BoxConstraints(maxWidth: 160),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.cardBorder),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF0F172A).withValues(alpha: 0.04),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
+      child: Padding(
+        padding: const EdgeInsets.only(left: 4),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            maxHeight: 26,
+            maxWidth: 200,
+          ),
+          child: Image.asset(
+            'assets/images/construct_core_text_logo.png',
+            height: 22,
+            alignment: Alignment.centerLeft,
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stackTrace) => Text(
+              AppConstants.appName,
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                color: AppColors.textPrimary,
+                letterSpacing: -0.4,
               ),
-              child: Image.network(
-                _companyImageUrl!,
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) =>
-                    _buildAppBarFallback(),
-              ),
-            )
-          : _buildAppBarFallback(),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
-  Widget _buildAppBarFallback() {
-    return Container(
-      height: 36,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: AppColors.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.hub_rounded, color: AppColors.primary, size: 19),
-          SizedBox(width: 6),
-          Text(
-            AppConstants.appName,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: AppColors.primary,
-              letterSpacing: -0.2,
-            ),
-          ),
-        ],
-      ),
+  Future<void> _refreshMenus() async {
+    setState(() => _isMenuLoading = true);
+    final menus = await _menuService.fetchMenus();
+    if (mounted) {
+      setState(() {
+        _menuItems = menus;
+        _isMenuLoading = false;
+      });
+    }
+  }
+
+  Widget _buildDynamicMenuTile(MenuItemModel item) {
+    final IconData icon;
+    final Color iconBg;
+    final Color iconColor;
+
+    switch (item.moduleType) {
+      case MenuModuleType.claim:
+        icon = Icons.receipt_long_rounded;
+        iconBg = const Color(0xFFEDE9FE);
+        iconColor = const Color(0xFF7C3AED);
+        break;
+      case MenuModuleType.leave:
+      case MenuModuleType.leaveCancellation:
+        icon = Icons.calendar_today_rounded;
+        iconBg = const Color(0xFFFEF3C7);
+        iconColor = const Color(0xFFD97706);
+        break;
+      case MenuModuleType.attendance:
+        icon = Icons.access_time_filled_rounded;
+        iconBg = const Color(0xFFECFDF5);
+        iconColor = const Color(0xFF059669);
+        break;
+      case MenuModuleType.notifications:
+        icon = Icons.notifications_rounded;
+        iconBg = const Color(0xFFE0F2FE);
+        iconColor = const Color(0xFF0284C7);
+        break;
+      case MenuModuleType.unknown:
+        icon = Icons.construction_rounded;
+        iconBg = const Color(0xFFF1F5F9);
+        iconColor = const Color(0xFF475569);
+        break;
+    }
+
+    return _buildDrawerTile(
+      icon: icon,
+      title: item.name,
+      isActive: false,
+      iconBg: iconBg,
+      iconColor: iconColor,
+      onTap: () => _handleDynamicMenuTap(item),
     );
+  }
+
+  void _handleDynamicMenuTap(MenuItemModel item) {
+    Navigator.pop(context);
+    switch (item.moduleType) {
+      case MenuModuleType.claim:
+        context.push('/claims');
+        break;
+      case MenuModuleType.leave:
+      case MenuModuleType.leaveCancellation:
+        context.push('/leave');
+        break;
+      case MenuModuleType.attendance:
+        context.push('/daily-attendance');
+        break;
+      case MenuModuleType.notifications:
+        context.push('/notifications');
+        break;
+      case MenuModuleType.unknown:
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${item.name} module is not yet supported on mobile.',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        break;
+    }
   }
 
   Widget _buildDrawerTile({
@@ -2150,6 +2223,369 @@ class _DashboardPageState extends State<DashboardPage> {
                     size: 18,
                     color: Color(0xFFCBD5E1),
                   ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HeaderConfigSheet extends StatefulWidget {
+  final List<BranchModel> branches;
+  final BranchModel? selectedBranch;
+  final List<FinancialYearModel> financialYears;
+  final FinancialYearModel? selectedFinancialYear;
+  final ValueChanged<BranchModel> onBranchSelected;
+  final ValueChanged<FinancialYearModel> onFinancialYearSelected;
+  final VoidCallback onApply;
+
+  const _HeaderConfigSheet({
+    required this.branches,
+    required this.selectedBranch,
+    required this.financialYears,
+    required this.selectedFinancialYear,
+    required this.onBranchSelected,
+    required this.onFinancialYearSelected,
+    required this.onApply,
+  });
+
+  @override
+  State<_HeaderConfigSheet> createState() => _HeaderConfigSheetState();
+}
+
+class _HeaderConfigSheetState extends State<_HeaderConfigSheet> {
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+  BranchModel? _currentBranch;
+  FinancialYearModel? _currentFinancialYear;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentBranch = widget.selectedBranch;
+    _currentFinancialYear = widget.selectedFinancialYear;
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenHeight = MediaQuery.of(context).size.height;
+    final viewInsetsBottom = MediaQuery.of(context).viewInsets.bottom;
+    final query = _searchQuery.trim().toLowerCase();
+    final filteredBranches = query.isEmpty
+        ? widget.branches
+        : widget.branches
+              .where((b) => b.name.toLowerCase().contains(query))
+              .toList();
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: viewInsetsBottom),
+      child: SafeArea(
+        top: false,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: screenHeight * 0.82),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Drag handle
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE2E8F0),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+
+                // Header
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Office & Financial Year Configuration',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        size: 20,
+                        color: AppColors.textMuted,
+                      ),
+                      onPressed: () => Navigator.pop(context),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+
+                // Branch Header + Count
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Branch',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textMuted,
+                      ),
+                    ),
+                    if (widget.branches.isNotEmpty)
+                      Text(
+                        '${filteredBranches.length} of ${widget.branches.length}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+
+                // Search field for long branch lists
+                if (widget.branches.length > 5) ...[
+                  TextField(
+                    controller: _searchController,
+                    onChanged: (val) => setState(() => _searchQuery = val),
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      color: AppColors.textPrimary,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Search branch...',
+                      hintStyle: const TextStyle(
+                        fontSize: 13,
+                        color: AppColors.textMuted,
+                      ),
+                      prefixIcon: const Icon(
+                        Icons.search_rounded,
+                        size: 18,
+                        color: AppColors.textMuted,
+                      ),
+                      suffixIcon: _searchQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(
+                                Icons.clear_rounded,
+                                size: 17,
+                                color: AppColors.textMuted,
+                              ),
+                              onPressed: () {
+                                _searchController.clear();
+                                setState(() => _searchQuery = '');
+                              },
+                            )
+                          : null,
+                      isDense: true,
+                      filled: true,
+                      fillColor: const Color(0xFFF8FAFC),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(
+                          color: AppColors.primary,
+                          width: 1.2,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+
+                // Scrollable Branch List
+                if (widget.branches.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'No branches available',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppColors.textMuted,
+                      ),
+                    ),
+                  )
+                else if (filteredBranches.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Center(
+                      child: Text(
+                        'No matching branches found',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: filteredBranches.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 4),
+                      itemBuilder: (context, index) {
+                        final branch = filteredBranches[index];
+                        final isSelected =
+                            branch.value == _currentBranch?.value;
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(10),
+                          onTap: () {
+                            setState(() => _currentBranch = branch);
+                            widget.onBranchSelected(branch);
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? AppColors.primary.withValues(alpha: 0.08)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: isSelected
+                                    ? AppColors.primary.withValues(alpha: 0.35)
+                                    : Colors.transparent,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.business_rounded,
+                                  size: 19,
+                                  color: isSelected
+                                      ? AppColors.primary
+                                      : AppColors.textMuted,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    branch.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 13.5,
+                                      fontWeight: isSelected
+                                          ? FontWeight.w700
+                                          : FontWeight.w500,
+                                      color: isSelected
+                                          ? AppColors.primary
+                                          : AppColors.textPrimary,
+                                    ),
+                                  ),
+                                ),
+                                if (isSelected)
+                                  const Icon(
+                                    Icons.check_circle_rounded,
+                                    size: 19,
+                                    color: AppColors.primary,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+
+                const Divider(height: 20),
+
+                // Financial Year Section (compact horizontal chips so always reachable)
+                const Text(
+                  'Financial Year',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textMuted,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (widget.financialYears.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 4),
+                    child: Text(
+                      'No financial years available',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppColors.textMuted,
+                      ),
+                    ),
+                  )
+                else
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: widget.financialYears.map((fy) {
+                      final isSelected =
+                          fy.value == _currentFinancialYear?.value;
+                      return ChoiceChip(
+                        label: Text(fy.name),
+                        selected: isSelected,
+                        onSelected: (_) {
+                          setState(() => _currentFinancialYear = fy);
+                          widget.onFinancialYearSelected(fy);
+                        },
+                        selectedColor: AppColors.primary.withValues(
+                          alpha: 0.12,
+                        ),
+                        backgroundColor: const Color(0xFFF8FAFC),
+                        side: BorderSide(
+                          color: isSelected
+                              ? AppColors.primary
+                              : const Color(0xFFE2E8F0),
+                        ),
+                        labelStyle: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: isSelected
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                          color: isSelected
+                              ? AppColors.primary
+                              : AppColors.textPrimary,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: widget.onApply,
+                    child: const Text('Apply Changes'),
+                  ),
+                ),
               ],
             ),
           ),

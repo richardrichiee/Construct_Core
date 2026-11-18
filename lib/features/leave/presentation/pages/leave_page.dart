@@ -4,6 +4,7 @@ import '../../../../app/theme/app_theme.dart';
 import '../../../../core/storage/local_storage_service.dart';
 import '../../../auth/data/models/user_rights_model.dart';
 import '../../../auth/data/services/user_rights_service.dart';
+import '../../../dashboard/data/models/menu_item_model.dart';
 import '../../../profile/data/models/employee_details_model.dart';
 import '../../../profile/data/services/employee_service.dart';
 import '../../data/models/leave_application_model.dart';
@@ -39,7 +40,13 @@ class _LeavePageState extends State<LeavePage> {
   Future<void> _loadLeaveData() async {
     setState(() => _isLoading = true);
     final user = await LocalStorageService.getUser();
-    final rights = await _userRightsService.fetchUserRights(menuCode: 19);
+    final leaveMenuCode = await LocalStorageService.getMenuCodeForModule(
+      MenuModuleType.leave,
+      fallback: 5105,
+    );
+    final rights = await _userRightsService.fetchUserRights(
+      menuCode: leaveMenuCode,
+    );
 
     final results = await Future.wait([
       _leaveService.fetchLeaveApplications(),

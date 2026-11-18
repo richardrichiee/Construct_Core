@@ -43,7 +43,7 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
   }
 
   Future<void> _loadDetails() async {
-    final menuInt = int.tryParse(widget.menuCode) ?? 19;
+    final menuInt = int.tryParse(widget.menuCode) ?? 5105;
     final results = await Future.wait([
       _inboxService.fetchInboxDetails(
         menuCode: widget.menuCode,
@@ -68,10 +68,12 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
     debugPrint('====================================================');
 
     final isLeave = widget.menuCode == '19' ||
+        widget.menuCode == '5105' ||
         widget.title.toLowerCase().contains('leave') ||
         list.any((i) => i.containsKey('LeaveType'));
 
     final isClaim = widget.menuCode == '15' ||
+        widget.menuCode == '5121' ||
         widget.title.toLowerCase().contains('claim') ||
         list.any((i) => i.containsKey('ClaimNumber') || i.containsKey('ClaimDate'));
 
@@ -128,27 +130,60 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
             final emp = item['EmployeeName']?.toString() ??
                 item['Employee']?.toString() ??
                 item['EmpName']?.toString() ??
+                item['Contractor']?.toString() ??
+                item['Supplier']?.toString() ??
+                item['SupplierName']?.toString() ??
+                item['Vendor']?.toString() ??
+                item['VendorName']?.toString() ??
+                item['PartyName']?.toString() ??
                 item['Name']?.toString() ??
                 item['UserName']?.toString() ??
                 'Applicant';
-            final rawDetails = item['Reason']?.toString() ??
-                item['Remarks']?.toString() ??
-                item['Details']?.toString() ??
-                '';
-            final cleanDetails =
-                (rawDetails.contains('.aspx') || rawDetails.startsWith('..'))
-                    ? ''
-                    : rawDetails;
+            final rawDetails = (item['Reason']?.toString() ??
+                    item['Remarks']?.toString() ??
+                    item['Details']?.toString() ??
+                    '')
+                .trim();
+            final isAspxRedirect =
+                rawDetails.contains('.aspx') || rawDetails.startsWith('..');
+            final cleanDetails = isAspxRedirect ? '' : rawDetails;
+
+            String? parsedMenuName;
+            if (isAspxRedirect) {
+              final m = RegExp(
+                r'MenuName=([^&]+)',
+                caseSensitive: false,
+              ).firstMatch(rawDetails);
+              if (m != null && m.group(1) != null) {
+                parsedMenuName = Uri.decodeComponent(
+                  m.group(1)!.replaceAll('&nbsp;', ' ').replaceAll('+', ' '),
+                ).replaceAll(RegExp(r'\s+'), ' ').trim();
+              }
+            }
 
             final type = item['ClaimType']?.toString() ??
                 item['LeaveType']?.toString() ??
                 item['ExpenseType']?.toString() ??
-                item['Category']?.toString();
+                item['Category']?.toString() ??
+                (parsedMenuName != null && parsedMenuName.isNotEmpty
+                    ? parsedMenuName
+                    : null);
 
             final claimNo = (item['ClaimNumber'] != null &&
                     item['ClaimNumber'].toString().isNotEmpty &&
                     item['ClaimNumber'].toString() != '0')
                 ? item['ClaimNumber'].toString()
+                : null;
+
+            final docNoRaw = item['BillNo'] ??
+                item['InvoiceNo'] ??
+                item['VoucherNo'] ??
+                item['RefNo'] ??
+                item['DocNo'];
+            final docNo = (docNoRaw != null &&
+                    docNoRaw.toString().isNotEmpty &&
+                    docNoRaw.toString() != '0')
+                ? docNoRaw.toString()
                 : null;
 
             final fromDate = item['ClaimDate']?.toString() ??
@@ -157,8 +192,15 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
             final toDate = item['ToDate']?.toString();
             final branch = item['BranchName']?.toString() ??
                 item['Branch']?.toString();
+            final rawAmount = item['Amount'] ??
+                item['PayableAmount'] ??
+                item['NetAmount'] ??
+                item['TotalAmount'] ??
+                item['BillAmount'];
             final amount =
-                item['Amount'] != null ? '₹ ${item['Amount']}' : null;
+                rawAmount != null && rawAmount.toString().trim().isNotEmpty
+                    ? '₹ ${rawAmount.toString().trim()}'
+                    : null;
 
             return {
               'id': int.tryParse(
@@ -169,12 +211,14 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
               'avatar': emp.isNotEmpty ? emp[0].toUpperCase() : 'A',
               'category': widget.title,
               'claimNo': claimNo,
+              'docNo': docNo,
               'type': type,
               'fromDate': fromDate,
               'toDate': toDate,
               'branch': branch,
               'amount': amount,
               'reason': cleanDetails,
+              'isAspxDetails': isAspxRedirect,
               'status': item['Status']?.toString() ?? 'Pending',
             };
           }).toList();
@@ -254,7 +298,9 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
     bool success = false;
     final titleLower = widget.title.toLowerCase();
     final isCancellation =
-        titleLower.contains('cancel') || titleLower.contains('cancellation');
+        widget.menuCode == '5102' ||
+        titleLower.contains('cancel') ||
+        titleLower.contains('cancellation');
 
     if (isCancellation) {
       final raw = currentItem['raw'] as Map<String, dynamic>?;
@@ -281,17 +327,29 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
         approvalStatus: action,
         itemData: currentItem,
       );
-    } else if (widget.menuCode == '19' || titleLower.contains('leave')) {
+    } else if (widget.menuCode == '19' ||
+        widget.menuCode == '5105' ||
+        titleLower.contains('leave')) {
       success = await _leaveService.approveOrForwardLeave(
         key: id,
         approvalStatus: action,
         itemData: currentItem,
       );
-    } else if (widget.menuCode == '15' || titleLower.contains('claim')) {
+    } else if (widget.menuCode == '15' ||
+        widget.menuCode == '5121' ||
+        titleLower.contains('claim')) {
       success = await _claimService.approveOrForwardClaim(
         key: id,
         approvalStatus: action,
         itemData: currentItem,
+      );
+    } else {
+      success = await _inboxService.processGeneralApproval(
+        key: id,
+        approvalStatus: action,
+        menuCode: widget.menuCode,
+        menuLinkCode: widget.menuLinkCode,
+        rawItem: currentItem['raw'] as Map<String, dynamic>?,
       );
     }
 
@@ -311,9 +369,13 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
 
       final categoryLabel = isCancellation
           ? 'Leave cancellation'
-          : (widget.menuCode == '19' || titleLower.contains('leave'))
+          : (widget.menuCode == '19' ||
+                  widget.menuCode == '5105' ||
+                  titleLower.contains('leave'))
               ? 'Leave application'
-              : (widget.menuCode == '15' || titleLower.contains('claim'))
+              : (widget.menuCode == '15' ||
+                      widget.menuCode == '5121' ||
+                      titleLower.contains('claim'))
                   ? 'Claim application'
                   : 'Request';
 
@@ -402,6 +464,7 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
                         final isPending =
                             !isApproved && !isForwarded && !isRejected;
                         final isClaimCategory = widget.menuCode == '15' ||
+                            widget.menuCode == '5121' ||
                             widget.title.toLowerCase().contains('claim') ||
                             item['claimNo'] != null;
 
@@ -497,9 +560,13 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
                               const Divider(height: 20, color: AppColors.cardBorder),
                               if (item['claimNo'] != null)
                                 _DetailInfoRow(label: 'Claim Number', value: item['claimNo'] as String),
+                              if (item['docNo'] != null)
+                                _DetailInfoRow(label: 'Ref / Bill No', value: item['docNo'] as String),
                               if (item['type'] != null && (item['type'] as String).isNotEmpty)
                                 _DetailInfoRow(
-                                  label: (widget.menuCode == '15' || widget.title.toLowerCase().contains('claim'))
+                                  label: (widget.menuCode == '15' ||
+                                          widget.menuCode == '5121' ||
+                                          widget.title.toLowerCase().contains('claim'))
                                       ? 'Category'
                                       : 'Type',
                                   value: item['type'] as String,
@@ -518,10 +585,15 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
                               Builder(
                                 builder: (context) {
                                   final isLeaveCategory = widget.menuCode == '19' ||
+                                      widget.menuCode == '5105' ||
                                       widget.title.toLowerCase().contains('leave') ||
                                       (item['type'] != null &&
                                           item['type'].toString().toLowerCase().contains('day'));
                                   final reasonVal = (item['reason'] as String?)?.trim() ?? '';
+                                  final isAspxDoc = item['isAspxDetails'] == true;
+                                  if (reasonVal.isEmpty && isAspxDoc) {
+                                    return const SizedBox.shrink();
+                                  }
 
                                   return Container(
                                     width: double.infinity,

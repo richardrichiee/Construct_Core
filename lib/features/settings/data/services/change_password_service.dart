@@ -21,7 +21,7 @@ class ChangePasswordService {
     ),
   );
 
-  /// Cryptone HRM stores passwords using SHA-1 over UTF-16LE (Unicode),
+  /// Cryptone Construction stores passwords using SHA-1 over UTF-16LE (Unicode),
   /// formatted as uppercase hexadecimal bytes separated by hyphens (e.g. BitConverter.ToString)
   static String hashPassword(String password) {
     final bytes = <int>[];
@@ -35,7 +35,7 @@ class ChangePasswordService {
         .join('-');
   }
 
-  /// POST /api/HRM/Mobile/v1/UpdatePassword/{UserID}/{timeStamp}/{accessPoint}
+  /// POST /api/Construction/Mobile/v1/UpdatePassword/{UserID}/{timeStamp}/{accessPoint}
   Future<ChangePasswordResult> changePassword({
     required String newPassword,
   }) async {
@@ -64,11 +64,9 @@ class ChangePasswordService {
         accessPoint: accessPoint,
       );
 
-      final hashedPassword = hashPassword(newPassword);
-
       final payload = {
         "Head": {
-          "NewPasswd": hashedPassword,
+          "NewPasswd": newPassword.trim(),
         }
       };
 

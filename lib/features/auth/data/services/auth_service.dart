@@ -96,13 +96,6 @@ class AuthService {
 
           final user = UserModel.fromJson(firstItem);
 
-          // Check if employee ID or employee code is 0 / empty / inactive
-          final rawEmpId = user.employeeId;
-          final rawEmpCode = user.empCode.trim();
-
-          final bool isEmpIdZero = rawEmpId <= 0;
-          final bool isEmpCodeZero = rawEmpCode == '0' || rawEmpCode == '0.0';
-
           // Also check explicit Active / IsActive / Status flag if present in response
           final isActiveRaw =
               firstItem['IsActive'] ?? firstItem['Active'] ?? firstItem['Status'];
@@ -117,7 +110,7 @@ class AuthService {
             }
           }
 
-          if (isEmpIdZero || isEmpCodeZero || isExplicitlyInactive) {
+          if (user.userId <= 0 || isExplicitlyInactive) {
             await LocalStorageService.clearUserSession();
             return LoginResult(
               isSuccess: false,
@@ -127,8 +120,12 @@ class AuthService {
 
           // Save user session in local storage
           await LocalStorageService.saveUser(user);
+          await LocalStorageService.saveSessionPassword(password);
           await LocalStorageService.saveOnlinePunchAnywhere(user.onlinePunchAnywhere);
-          debugPrint('💾 [AuthService] Saved user session. OnlinePunchAnywhere: ${user.onlinePunchAnywhere} (canPunchAnywhere: ${user.canPunchAnywhere})');
+          await LocalStorageService.setBiometricVerified(false);
+          debugPrint(
+            '💾 [AuthService] Saved user session. OnlinePunchAnywhere: ${user.onlinePunchAnywhere}, PunchNeeded: ${user.punchNeeded}, BranchStartTime: ${user.branchStartTime}, BranchEndTime: ${user.branchEndTime}',
+          );
 
           return LoginResult(
             isSuccess: true,
@@ -136,11 +133,14 @@ class AuthService {
           );
         }
 
-        if (data['error'] != null && data['error']['message'] != null) {
-          return LoginResult(
-            isSuccess: false,
-            errorMessage: data['error']['message'].toString(),
-          );
+        if (data['error'] != null) {
+          final errMsg = _extractServerErrorMessage(data);
+          if (errMsg != null && errMsg.isNotEmpty) {
+            return LoginResult(
+              isSuccess: false,
+              errorMessage: errMsg,
+            );
+          }
         }
       }
 
@@ -148,11 +148,43 @@ class AuthService {
         isSuccess: false,
         errorMessage: 'Invalid username or password.',
       );
+    } on DioException catch (dioErr) {
+      final serverMsg = _extractServerErrorMessage(dioErr.response?.data);
+      final statusCode = dioErr.response?.statusCode;
+      return LoginResult(
+        isSuccess: false,
+        errorMessage: serverMsg ??
+            (statusCode != null
+                ? 'Server error (HTTP $statusCode). Please contact support or try again.'
+                : 'Unable to connect to server. Please check your network and try again.'),
+      );
     } catch (e) {
       return LoginResult(
         isSuccess: false,
         errorMessage: 'Unable to connect to server. Please check your network and try again.',
       );
     }
+  }
+
+  String? _extractServerErrorMessage(dynamic data) {
+    if (data == null) return null;
+    if (data is Map) {
+      final errObj = data['error'];
+      if (errObj is Map) {
+        final msg = errObj['Message']?.toString() ??
+            errObj['message']?.toString() ??
+            errObj['ExceptionMessage']?.toString();
+        if (msg != null && msg.trim().isNotEmpty) return msg.trim();
+      } else if (errObj != null && errObj.toString().trim().isNotEmpty && errObj.toString() != '{}') {
+        return errObj.toString().trim();
+      }
+      final topMsg = data['Message']?.toString() ??
+          data['message']?.toString() ??
+          data['ErrorMessage']?.toString();
+      if (topMsg != null && topMsg.trim().isNotEmpty) return topMsg.trim();
+    } else if (data is String && data.trim().isNotEmpty) {
+      return data.trim();
+    }
+    return null;
   }
 }

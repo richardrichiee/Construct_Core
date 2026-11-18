@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../app/theme/app_theme.dart';
-import '../../../../core/constants/app_constants.dart';
 import '../../data/services/access_point_service.dart';
 
 class CompanyAccessPage extends StatefulWidget {
@@ -77,25 +76,28 @@ class _CompanyAccessPageState extends State<CompanyAccessPage> {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // App Logo (Clean, borderless, blended to UI like splash screen)
+                // App Logo
                 Center(
                   child: Image.asset(
-                    'assets/images/ally_one_dream_team.png',
-                    height: 56,
+                    'assets/images/construction_logo.png',
+                    height: 140,
                     fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Icon(
+                        Icons.apartment_rounded,
+                        size: 44,
+                        color: AppColors.primary,
+                      ),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 20),
-                const Text(
-                  AppConstants.appName,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 36),
 
                 // Access ID Input Field
                 TextField(

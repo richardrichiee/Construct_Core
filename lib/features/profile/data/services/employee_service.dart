@@ -6,8 +6,8 @@ import '../models/employee_details_model.dart';
 class EmployeeService {
   final Dio _dio = Dio(
     BaseOptions(
-      connectTimeout: const Duration(seconds: 8),
-      receiveTimeout: const Duration(seconds: 8),
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 30),
     ),
   );
 
@@ -16,7 +16,8 @@ class EmployeeService {
       final accessPoint = await LocalStorageService.getAccessPoint();
       if (accessPoint == null || accessPoint.isEmpty) return null;
       final user = await LocalStorageService.getUser();
-      final employeeId = user?.employeeId ?? 1;
+      final employeeId = user?.employeeId ?? 0;
+      if (employeeId <= 0) return null;
 
       final url = AppUrls.getEmployeeDashboardUrl(
         accessPoint: accessPoint,

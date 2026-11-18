@@ -6,6 +6,7 @@ import '../../../../core/network/app_urls.dart';
 import '../../../../core/storage/local_storage_service.dart';
 import '../../../auth/data/models/user_rights_model.dart';
 import '../../../auth/data/services/user_rights_service.dart';
+import '../../../dashboard/data/models/menu_item_model.dart';
 import '../models/claim_models.dart';
 
 class ClaimService {
@@ -41,18 +42,25 @@ class ClaimService {
     return ap.trim();
   }
 
-  /// GET /api/HRM/General/v1/GetUserRights/{accessPoint}/{timeStamp}/15/{userId}/{branchId}
+  /// GET /api/Construction/General/v1/GetUserRights/{timeStamp}/{accessPoint}/15/{userId}/{branchId}
   Future<UserRightsModel?> fetchClaimUserRights() async {
     try {
       final accessPoint = await _getValidAccessPoint();
       if (accessPoint == null) return UserRightsModel.noAccess();
       final user = await LocalStorageService.getUser();
       final userId = user?.userId ?? 2;
-      const branchId = 1;
+      final savedBranchId = await LocalStorageService.getSelectedBranchId();
+      final branchId =
+          (savedBranchId != null && savedBranchId > 0) ? savedBranchId : 1;
+
+      final claimMenuCode = await LocalStorageService.getMenuCodeForModule(
+        MenuModuleType.claim,
+        fallback: 5121,
+      );
 
       final url = AppUrls.getUserRightsUrl(
         accessPoint: accessPoint,
-        menuCode: 15, // Claim Form Menu Code
+        menuCode: claimMenuCode,
         userId: userId,
         branchId: branchId,
       );
@@ -79,13 +87,35 @@ class ClaimService {
     }
   }
 
-  /// GET /api/HRM/General/v1/RetrieveDataTable_GeneralDetails/{accessPoint}/{timeStamp}?iD=0&param=ClaimMaster
+  /// GET /api/Construction/ClaimMaster/v1/List/{timeStamp}/{accessPoint}
   Future<List<ClaimMasterItem>> fetchClaimCategories() async {
     try {
       final accessPoint = await _getValidAccessPoint();
       if (accessPoint == null) return [];
-      final url = AppUrls.getClaimMasterUrl(accessPoint: accessPoint);
+      
+      // 1. Try dedicated ClaimMaster List endpoint first
+      final masterListUrl = AppUrls.getClaimMasterListUrl(accessPoint: accessPoint);
+      try {
+        final res = await _dio.get(
+          masterListUrl,
+          options: Options(headers: {'Accept': 'application/json'}),
+        );
+        if (res.statusCode == 200 && res.data != null) {
+          final data = res.data;
+          if (data['value'] != null && data['value'] is List && (data['value'] as List).isNotEmpty) {
+            final list = data['value'] as List;
+            final items = list
+                .whereType<Map>()
+                .map((item) => ClaimMasterItem.fromJson(Map<String, dynamic>.from(item)))
+                .where((c) => c.value > 0 && c.name.isNotEmpty)
+                .toList();
+            if (items.isNotEmpty) return items;
+          }
+        }
+      } catch (_) {}
 
+      // 2. Fallback to GeneralData/0/ClaimMaster
+      final url = AppUrls.getClaimMasterUrl(accessPoint: accessPoint);
       final response = await _dio.get(
         url,
         options: Options(headers: {'Accept': 'application/json'}),
@@ -96,10 +126,12 @@ class ClaimService {
         if (data['value'] != null && data['value'] is List) {
           final list = data['value'] as List;
           return list
+              .whereType<Map>()
               .map(
                 (item) =>
-                    ClaimMasterItem.fromJson(item as Map<String, dynamic>),
+                    ClaimMasterItem.fromJson(Map<String, dynamic>.from(item)),
               )
+              .where((c) => c.value > 0 && c.name.isNotEmpty)
               .toList();
         }
       }
@@ -110,7 +142,7 @@ class ClaimService {
     }
   }
 
-  /// POST /api/HRM/ClaimForm/v1/GetRate/{timeStamp}/{accessPoint}
+  /// POST /api/Construction/ClaimForm/v1/GetRate/{timeStamp}/{accessPoint}
   Future<ClaimRateResult> getClaimRate(String claimId) async {
     try {
       final accessPoint = await _getValidAccessPoint();
@@ -148,7 +180,7 @@ class ClaimService {
     }
   }
 
-  /// GET /api/HRM/ClaimForm/v1/List/{timeStamp}/{accessPoint}
+  /// GET /api/Construction/ClaimForm/v1/List/{timeStamp}/{accessPoint}
   Future<List<ClaimModel>> fetchClaims() async {
     try {
       final accessPoint = await _getValidAccessPoint();
@@ -177,8 +209,9 @@ class ClaimService {
             if (userEmpId != '0' && c.empId == userEmpId) return true;
             if (userId != '0' && c.empId == userId) return true;
             if (userName.isNotEmpty &&
-                c.employeeName.toLowerCase().trim().contains(userName))
+                c.employeeName.toLowerCase().trim().contains(userName)) {
               return true;
+            }
             return false;
           }).toList();
 
@@ -192,7 +225,7 @@ class ClaimService {
     }
   }
 
-  /// POST /api/HRM/ClaimForm/v1/Save/{id}/{userId}/{timeStamp}/{accessPoint}
+  /// POST /api/Construction/ClaimForm/v1/Save/{id}/{userId}/{timeStamp}/{accessPoint}
   Future<ClaimSaveResult> saveClaimFormWithResult({
     required String claimDate,
     required String remarks,
@@ -226,16 +259,20 @@ class ClaimService {
       debugPrint('💰 Total Amount: $totalAmount');
       debugPrint('📝 Remarks: $remarks');
 
-      // Check transaction hierarchy from UserRights (MenuCode 15 for Claims):
+      // Check transaction hierarchy from UserRights (dynamic Claim MenuCode):
       // If transactions == 3, the user has Level 3 approval authority (Manager) -> Approve directly ('A')
       String finalApprovalStatus = approvalStatus ?? 'N';
       if (finalApprovalStatus != 'A') {
         try {
+          final claimMenuCode = await LocalStorageService.getMenuCodeForModule(
+            MenuModuleType.claim,
+            fallback: 5121,
+          );
           final rights = await UserRightsService().fetchUserRights(
-            menuCode: 15,
+            menuCode: claimMenuCode,
           );
           debugPrint(
-            '🔑 UserRights for MenuCode 15: transactions=${rights.transactions}, add=${rights.addRight}, edit=${rights.modiRight}',
+            '🔑 UserRights for MenuCode $claimMenuCode: transactions=${rights.transactions}, add=${rights.addRight}, edit=${rights.modiRight}',
           );
           if (rights.transactions == 3) {
             finalApprovalStatus = 'A';
@@ -262,9 +299,13 @@ class ClaimService {
         return json;
       }).toList();
 
+      final savedBranchId = await LocalStorageService.getSelectedBranchId();
+      final branchId =
+          (savedBranchId != null && savedBranchId > 0) ? savedBranchId.toString() : "1";
+
       final payload = {
         "Head": {
-          "BranchID": "1",
+          "BranchID": branchId,
           "FinYearID": "3",
           "ClaimDate": _formatToDate(claimDate),
           "ClaimNumber": "0",
@@ -403,7 +444,7 @@ class ClaimService {
     return result.success;
   }
 
-  /// GET /api/HRM/ClaimForm/v1/Get/{id}/{timeStamp}/{accessPoint}
+  /// GET /api/Construction/ClaimForm/v1/Get/{id}/{timeStamp}/{accessPoint}
   Future<Map<String, dynamic>?> fetchClaimRawDetails(int key) async {
     try {
       final accessPoint = await _getValidAccessPoint();
@@ -430,7 +471,7 @@ class ClaimService {
     }
   }
 
-  /// POST /api/HRM/ClaimForm/v1/Save/{key}/{userId}/{timeStamp}/{accessPoint}
+  /// POST /api/Construction/ClaimForm/v1/Save/{key}/{userId}/{timeStamp}/{accessPoint}
   Future<bool> updateClaimApprovalStatus({
     required int key,
     required String approvalStatus, // "A" for Approve, "R" for Reject
@@ -558,7 +599,7 @@ class ClaimService {
     }
   }
 
-  /// POST /api/HRM/ClaimForm/v1/Delete/{id}/{timeStamp}/{accessPoint}
+  /// POST /api/Construction/ClaimForm/v1/Delete/{id}/{timeStamp}/{accessPoint}
   Future<bool> deleteClaim(int id) async {
     try {
       final accessPoint = await _getValidAccessPoint();
@@ -581,7 +622,7 @@ class ClaimService {
     }
   }
 
-  /// POST /api/HRM/ClaimForm/v1/EmpSearch/{timeStamp}/{accessPoint}
+  /// POST /api/Construction/ClaimForm/v1/EmpSearch/{timeStamp}/{accessPoint}
   Future<List<ClaimModel>> searchEmployeeClaims({
     String? fromDate,
     String? toDate,
@@ -591,7 +632,9 @@ class ClaimService {
       if (accessPoint == null) return [];
       final user = await LocalStorageService.getUser();
       final userId = user?.userId ?? 2;
-      const branchId = 1;
+      final savedBranchId = await LocalStorageService.getSelectedBranchId();
+      final branchId =
+          (savedBranchId != null && savedBranchId > 0) ? savedBranchId : 1;
 
       final url = AppUrls.getClaimEmpSearchUrl(accessPoint: accessPoint);
 
@@ -629,13 +672,13 @@ class ClaimService {
               .toList();
         }
       }
-      return [];
-    } catch (e) {
-      return [];
-    }
+    } catch (_) {}
+
+    // Fallback to ClaimForm/v1/List if EmpSearch fails on the server
+    return fetchClaims();
   }
 
-  /// POST /api/HRM/ClaimForm/v1/Approve_Or_Forward/{timeStamp}/{accessPoint}
+  /// POST /api/Construction/ClaimForm/v1/Approve_Or_Forward/{timeStamp}/{accessPoint}
   /// ApprovalStatus: "A" (Approve), "F" (Forward), "R" (Reject)
   Future<bool> approveOrForwardClaim({
     required int key,

@@ -17,7 +17,9 @@ class UserRightsService {
       }
       final user = await LocalStorageService.getUser();
       final userId = user?.userId ?? 2;
-      final activeBranchId = branchId ?? 1;
+      final savedBranchId = await LocalStorageService.getSelectedBranchId();
+      final activeBranchId =
+          branchId ?? ((savedBranchId != null && savedBranchId > 0) ? savedBranchId : 1);
 
       final url = AppUrls.getUserRightsUrl(
         accessPoint: accessPoint,

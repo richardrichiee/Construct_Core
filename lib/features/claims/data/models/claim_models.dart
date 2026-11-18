@@ -9,8 +9,17 @@ class ClaimMasterItem {
 
   factory ClaimMasterItem.fromJson(Map<String, dynamic> json) {
     return ClaimMasterItem(
-      value: int.tryParse(json['Value']?.toString() ?? '0') ?? 0,
-      name: json['Name']?.toString() ?? '',
+      value: int.tryParse(
+            json['Value']?.toString() ??
+                json['Key']?.toString() ??
+                json['ID']?.toString() ??
+                '0',
+          ) ??
+          0,
+      name: json['Name']?.toString() ??
+          json['ClaimName']?.toString() ??
+          json['Title']?.toString() ??
+          '',
     );
   }
 

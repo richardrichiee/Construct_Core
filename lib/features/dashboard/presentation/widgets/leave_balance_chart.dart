@@ -216,7 +216,7 @@ class _LeaveBalanceChartState extends State<LeaveBalanceChart> {
   }
 
   Widget _buildDonutChartView(List<LeaveSummaryItem> data, double totalBalance) {
-    if (totalBalance == 0) {
+    if (data.isEmpty) {
       return Container(
         padding: const EdgeInsets.symmetric(vertical: 24),
         alignment: Alignment.center,

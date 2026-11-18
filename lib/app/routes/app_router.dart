@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../features/attendance/presentation/pages/daily_attendance_page.dart';
+import '../../features/auth/presentation/pages/biometric_verification_page.dart';
 import '../../features/auth/presentation/pages/company_access_page.dart';
 import '../../features/auth/presentation/pages/login_page.dart';
 import '../../features/auth/presentation/pages/splash_page.dart';
@@ -29,7 +31,17 @@ final GoRouter appRouter = GoRouter(
     ),
     GoRoute(
       path: '/login',
-      builder: (context, state) => const LoginPage(),
+      builder: (context, state) => LoginPage(
+        reason: state.uri.queryParameters['reason'],
+      ),
+    ),
+    GoRoute(
+      path: '/biometric-verify',
+      builder: (context, state) => const BiometricVerificationPage(),
+    ),
+    GoRoute(
+      path: '/daily-attendance',
+      builder: (context, state) => const DailyAttendancePage(),
     ),
     GoRoute(
       path: '/leave',

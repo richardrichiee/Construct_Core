@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../../../app/theme/app_theme.dart';
+import '../../../../core/storage/local_storage_service.dart';
 import '../../../auth/data/models/user_rights_model.dart';
 import '../../../auth/data/services/user_rights_service.dart';
+import '../../../dashboard/data/models/menu_item_model.dart';
 import '../../data/models/claim_models.dart';
 import '../../data/services/claim_service.dart';
 
@@ -43,7 +45,13 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
 
   Future<void> _loadUserRights() async {
     try {
-      final rights = await _userRightsService.fetchUserRights(menuCode: 15);
+      final claimMenuCode = await LocalStorageService.getMenuCodeForModule(
+        MenuModuleType.claim,
+        fallback: 5121,
+      );
+      final rights = await _userRightsService.fetchUserRights(
+        menuCode: claimMenuCode,
+      );
       if (mounted) {
         setState(() {
           _userRights = rights;

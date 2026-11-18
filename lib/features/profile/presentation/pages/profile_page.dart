@@ -152,7 +152,11 @@ class _ProfilePageState extends State<ProfilePage> {
         ? _employeeDetails!.empCode
         : (_employeeDetails?.empId != null && _employeeDetails!.empId > 0
             ? 'EMP-${_employeeDetails!.empId.toString().padLeft(4, '0')}'
-            : 'EMP-0026');
+            : (_user?.empCode.isNotEmpty == true && _user!.empCode != '0'
+                ? _user!.empCode
+                : (_user?.userId != null && _user!.userId > 0
+                    ? 'USER-${_user!.userId.toString().padLeft(4, '0')}'
+                    : 'Not Assigned')));
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -265,43 +269,47 @@ class _ProfilePageState extends State<ProfilePage> {
                     const SizedBox(height: 22),
 
                     // 4. Contact & Address
-                    _buildSectionHeader('CONTACT & COMMUNICATION'),
-                    const SizedBox(height: 8),
-                    _ProfileGroupCard(
-                      children: [
-                        if (email.isNotEmpty) ...[
-                          _ProfileInfoRow(
-                            icon: Icons.mail_outline_rounded,
-                            iconBg: const Color(0xFFEFF6FF),
-                            iconColor: AppColors.primary,
-                            label: 'Email Address',
-                            value: email,
-                          ),
+                    if (email.isNotEmpty ||
+                        phone.isNotEmpty ||
+                        address.isNotEmpty) ...[
+                      _buildSectionHeader('CONTACT & COMMUNICATION'),
+                      const SizedBox(height: 8),
+                      _ProfileGroupCard(
+                        children: [
+                          if (email.isNotEmpty) ...[
+                            _ProfileInfoRow(
+                              icon: Icons.mail_outline_rounded,
+                              iconBg: const Color(0xFFEFF6FF),
+                              iconColor: AppColors.primary,
+                              label: 'Email Address',
+                              value: email,
+                            ),
+                          ],
+                          if (phone.isNotEmpty) ...[
+                            if (email.isNotEmpty) const _ProfileDivider(),
+                            _ProfileInfoRow(
+                              icon: Icons.phone_outlined,
+                              iconBg: const Color(0xFFECFDF5),
+                              iconColor: const Color(0xFF059669),
+                              label: 'Phone Number',
+                              value: phone,
+                            ),
+                          ],
+                          if (address.isNotEmpty) ...[
+                            if (email.isNotEmpty || phone.isNotEmpty)
+                              const _ProfileDivider(),
+                            _ProfileInfoRow(
+                              icon: Icons.location_on_outlined,
+                              iconBg: const Color(0xFFFFF1F2),
+                              iconColor: const Color(0xFFE11D48),
+                              label: 'Office Address',
+                              value: address,
+                            ),
+                          ],
                         ],
-                        if (phone.isNotEmpty) ...[
-                          if (email.isNotEmpty) const _ProfileDivider(),
-                          _ProfileInfoRow(
-                            icon: Icons.phone_outlined,
-                            iconBg: const Color(0xFFECFDF5),
-                            iconColor: const Color(0xFF059669),
-                            label: 'Phone Number',
-                            value: phone,
-                          ),
-                        ],
-                        if (address.isNotEmpty) ...[
-                          if (email.isNotEmpty || phone.isNotEmpty)
-                            const _ProfileDivider(),
-                          _ProfileInfoRow(
-                            icon: Icons.location_on_outlined,
-                            iconBg: const Color(0xFFFFF1F2),
-                            iconColor: const Color(0xFFE11D48),
-                            label: 'Office Address',
-                            value: address,
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 22),
+                      ),
+                      const SizedBox(height: 22),
+                    ],
 
                     // 5. Sign Out Card matching Drawer
                     _buildSignOutTile(context),

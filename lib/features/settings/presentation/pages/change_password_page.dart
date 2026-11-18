@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../app/theme/app_theme.dart';
+import '../../../../core/storage/local_storage_service.dart';
 import '../../data/services/change_password_service.dart';
 
 class ChangePasswordPage extends StatefulWidget {
@@ -12,17 +13,34 @@ class ChangePasswordPage extends StatefulWidget {
 
 class _ChangePasswordPageState extends State<ChangePasswordPage> {
   final _formKey = GlobalKey<FormState>();
+  final _currentPasswordController = TextEditingController();
   final _newPasswordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _changePasswordService = ChangePasswordService();
 
+  bool _isCurrentPasswordVisible = false;
   bool _isNewPasswordVisible = false;
   bool _isConfirmPasswordVisible = false;
   bool _isLoading = false;
   String? _errorMessage;
+  String? _savedSessionPassword;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCurrentPassword();
+  }
+
+  Future<void> _loadCurrentPassword() async {
+    final saved = await LocalStorageService.getSessionPassword();
+    if (mounted) {
+      setState(() => _savedSessionPassword = saved);
+    }
+  }
 
   @override
   void dispose() {
+    _currentPasswordController.dispose();
     _newPasswordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
@@ -78,7 +96,29 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
       return;
     }
 
+    final currentPassword = _currentPasswordController.text.trim();
     final newPassword = _newPasswordController.text.trim();
+    final savedPassword =
+        _savedSessionPassword ?? await LocalStorageService.getSessionPassword();
+
+    if (savedPassword != null &&
+        savedPassword.isNotEmpty &&
+        currentPassword != savedPassword) {
+      setState(() {
+        _errorMessage = 'Current password is incorrect.';
+      });
+      return;
+    }
+
+    if (newPassword == currentPassword ||
+        (savedPassword != null &&
+            savedPassword.isNotEmpty &&
+            newPassword == savedPassword)) {
+      setState(() {
+        _errorMessage = 'New password must differ from current password.';
+      });
+      return;
+    }
 
     setState(() => _isLoading = true);
 
@@ -91,6 +131,9 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
     setState(() => _isLoading = false);
 
     if (result.isSuccess) {
+      await LocalStorageService.saveSessionPassword(newPassword);
+      await LocalStorageService.updateBiometricPasswordIfEnabled(newPassword);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Row(
@@ -266,6 +309,96 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // Current Password Field
+                      const Text(
+                        'Current Password',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextFormField(
+                        controller: _currentPasswordController,
+                        obscureText: !_isCurrentPasswordVisible,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: 'Enter current password',
+                          hintStyle: const TextStyle(
+                            fontSize: 13,
+                            color: Color(0xFF94A3B8),
+                          ),
+                          prefixIcon: const Icon(
+                            Icons.vpn_key_outlined,
+                            size: 20,
+                            color: Color(0xFF64748B),
+                          ),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _isCurrentPasswordVisible
+                                  ? Icons.visibility_off_rounded
+                                  : Icons.visibility_rounded,
+                              size: 20,
+                              color: const Color(0xFF64748B),
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _isCurrentPasswordVisible =
+                                    !_isCurrentPasswordVisible;
+                              });
+                            },
+                          ),
+                          filled: true,
+                          fillColor: const Color(0xFFF8FAFC),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 14,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFE2E8F0),
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFE2E8F0),
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(
+                              color: AppColors.primary,
+                              width: 1.5,
+                            ),
+                          ),
+                          errorBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFEF4444),
+                            ),
+                          ),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter your current password';
+                          }
+                          if (_savedSessionPassword != null &&
+                              _savedSessionPassword!.isNotEmpty &&
+                              value.trim() != _savedSessionPassword) {
+                            return 'Current password is incorrect';
+                          }
+                          return null;
+                        },
+                      ),
+
+                      const SizedBox(height: 18),
+
                       // New Password Field
                       const Text(
                         'New Password',
@@ -347,6 +480,13 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                           }
                           if (value.trim().length < 6) {
                             return 'Password must be at least 6 characters long';
+                          }
+                          final current = _currentPasswordController.text.trim();
+                          if (value.trim() == current ||
+                              (_savedSessionPassword != null &&
+                                  _savedSessionPassword!.isNotEmpty &&
+                                  value.trim() == _savedSessionPassword)) {
+                            return 'New password must differ from current password';
                           }
                           return null;
                         },

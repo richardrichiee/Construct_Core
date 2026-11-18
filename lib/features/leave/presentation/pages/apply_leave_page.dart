@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../profile/data/models/employee_details_model.dart';
 import '../../../profile/data/services/employee_service.dart';
+import '../../data/services/leave_service.dart';
 import '../widgets/apply_leave_dialog.dart';
 
 class ApplyLeavePage extends StatefulWidget {
@@ -13,6 +15,7 @@ class ApplyLeavePage extends StatefulWidget {
 
 class _ApplyLeavePageState extends State<ApplyLeavePage> {
   final _employeeService = EmployeeService();
+  final _leaveService = LeaveService();
   List<LeaveBalanceItem>? _leaveBalances;
   bool _isLoading = true;
 
@@ -23,19 +26,34 @@ class _ApplyLeavePageState extends State<ApplyLeavePage> {
   }
 
   Future<void> _loadBalances() async {
-    final details = await _employeeService.fetchEmployeeDashboard();
+    final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final details = await _employeeService.fetchEmployeeDashboard(date: today);
+    var balances = List<LeaveBalanceItem>.from(details?.leaveBalances ?? []);
+    final masterTypes = await _leaveService.fetchLeaveMasterTypes();
+    if (balances.isEmpty) {
+      balances = masterTypes;
+    } else {
+      for (final m in masterTypes) {
+        if (!balances.any((b) =>
+            b.leaveId == m.leaveId ||
+            b.leaveName.trim().toLowerCase() ==
+                m.leaveName.trim().toLowerCase())) {
+          balances.add(m);
+        }
+      }
+    }
     if (mounted) {
       setState(() {
-        _leaveBalances = details?.leaveBalances ?? [];
+        _leaveBalances = balances;
         _isLoading = false;
       });
     }
   }
 
-
   void _openApplyLeaveModal({
     required String leaveId,
     required String leaveName,
+    double? balance,
   }) {
     showModalBottomSheet<bool>(
       context: context,
@@ -44,6 +62,7 @@ class _ApplyLeavePageState extends State<ApplyLeavePage> {
       builder: (context) => ApplyLeaveDialog(
         initialLeaveId: leaveId,
         initialLeaveName: leaveName,
+        initialBalance: balance,
       ),
     ).then((result) {
       if (result == true) {
@@ -144,10 +163,13 @@ class _ApplyLeavePageState extends State<ApplyLeavePage> {
                           ? const Color(0xFF1E88E5)
                           : const Color(0xFF7C3AED));
 
+                  final hasKnownBalance = b.closing >= 0;
                   final val = b.closing < 0 ? 0.0 : b.closing;
-                  final balanceText = (val % 1 == 0)
-                      ? '${val.toInt()} ${val == 1 ? "Day" : "Days"}'
-                      : '$val Days';
+                  final balanceText = !hasKnownBalance
+                      ? ''
+                      : ((val % 1 == 0)
+                          ? '${val.toInt()} ${val == 1 ? "Day" : "Days"}'
+                          : '$val Days');
 
                   final formattedTitle = b.leaveName.split(' ').map((word) {
                     if (word.isEmpty) return word;
@@ -164,6 +186,7 @@ class _ApplyLeavePageState extends State<ApplyLeavePage> {
                       onTap: () => _openApplyLeaveModal(
                         leaveId: b.leaveId.toString(),
                         leaveName: formattedTitle,
+                        balance: b.closing >= 0 ? b.closing : null,
                       ),
                     ),
                   );
@@ -250,27 +273,36 @@ class _LeaveCategoryCard extends StatelessWidget {
                             color: color.withValues(alpha: 0.2),
                           ),
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text(
-                              'Balance: ',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: AppColors.textSecondary,
-                                fontWeight: FontWeight.w500,
+                        child: balanceText.isNotEmpty
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text(
+                                    'Balance: ',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.textSecondary,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  Text(
+                                    balanceText,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                      color: color,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : Text(
+                                'Tap to Apply',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: color,
+                                ),
                               ),
-                            ),
-                            Text(
-                              balanceText,
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: color,
-                              ),
-                            ),
-                          ],
-                        ),
                       ),
                     ],
                   ),

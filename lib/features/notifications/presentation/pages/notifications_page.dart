@@ -38,18 +38,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
     if (mounted) {
       setState(() {
-        _categories = list.where((item) {
-          final menuTitle = (item['Menu']?.toString() ?? '').toLowerCase();
-          final menuCode = item['MenuCode']?.toString() ?? '';
-          return menuCode == '19' ||
-              menuCode == '15' ||
-              menuTitle.contains('leave') ||
-              menuTitle.contains('cancel') ||
-              menuTitle.contains('cancellation') ||
-              menuTitle.contains('claim') ||
-              menuTitle.contains('expense') ||
-              menuTitle.contains('reimbursement');
-        }).toList();
+        _categories = list;
         _isLoading = false;
       });
     }
@@ -63,12 +52,18 @@ class _NotificationsPageState extends State<NotificationsPage> {
       return Icons.event_note_rounded;
     } else if (name.contains('claim') || name.contains('expense')) {
       return Icons.receipt_long_rounded;
+    } else if (name.contains('invoice') || name.contains('bill')) {
+      return Icons.request_quote_rounded;
+    } else if (name.contains('wage') || name.contains('salary') || name.contains('pay')) {
+      return Icons.payments_rounded;
+    } else if (name.contains('contract') || name.contains('work')) {
+      return Icons.engineering_rounded;
+    } else if (name.contains('supplier') || name.contains('purchase') || name.contains('material')) {
+      return Icons.inventory_2_rounded;
     } else if (name.contains('offer') || name.contains('letter')) {
       return Icons.description_rounded;
     } else if (name.contains('attendance')) {
       return Icons.access_time_rounded;
-    } else if (name.contains('salary') || name.contains('pay')) {
-      return Icons.payments_rounded;
     }
     return Icons.folder_open_rounded;
   }

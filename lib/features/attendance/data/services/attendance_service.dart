@@ -10,8 +10,8 @@ import '../models/last_attendance_model.dart';
 class AttendanceService {
   final Dio _dio = Dio(
     BaseOptions(
-      connectTimeout: const Duration(seconds: 8),
-      receiveTimeout: const Duration(seconds: 8),
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 30),
     ),
   );
 
@@ -20,7 +20,8 @@ class AttendanceService {
       final accessPoint = await LocalStorageService.getAccessPoint();
       if (accessPoint == null || accessPoint.isEmpty) return [];
       final user = await LocalStorageService.getUser();
-      final employeeId = user?.employeeId ?? 1;
+      final employeeId = user?.employeeId ?? 0;
+      if (employeeId <= 0) return [];
 
       final url = AppUrls.getEmployeeDashboardUrl(
         accessPoint: accessPoint,
@@ -51,7 +52,7 @@ class AttendanceService {
     }
   }
 
-  /// GET /api/HRM/Mobile/v1/GetLastAttendance/{accessPoint}/{timeStamp}/{BranchID}/{EmployeeID}
+  /// GET /api/Construction/Mobile/v1/GetLastAttendance/{accessPoint}/{timeStamp}/{BranchID}/{EmployeeID}
   Future<LastAttendanceModel?> fetchLastAttendance({
     required int branchId,
     int? employeeId,
@@ -60,7 +61,8 @@ class AttendanceService {
       final accessPoint = await LocalStorageService.getAccessPoint();
       if (accessPoint == null || accessPoint.isEmpty) return null;
       final user = await LocalStorageService.getUser();
-      final empId = employeeId ?? user?.employeeId ?? 1;
+      final empId = employeeId ?? user?.employeeId ?? 0;
+      if (empId <= 0) return null;
 
       final url = AppUrls.getLastAttendanceUrl(
         accessPoint: accessPoint,
@@ -92,7 +94,7 @@ class AttendanceService {
     }
   }
 
-  /// GET /api/HRM/Mobile/v1/GetHistoryAttendance/{accessPoint}/{timeStamp}/{BranchID}/{EmployeeID}
+  /// GET /api/Construction/Mobile/v1/GetHistoryAttendance/{accessPoint}/{timeStamp}/{BranchID}/{EmployeeID}
   Future<List<LastAttendanceModel>> fetchHistoryAttendance({
     required int branchId,
     int? employeeId,
@@ -101,7 +103,8 @@ class AttendanceService {
       final accessPoint = await LocalStorageService.getAccessPoint();
       if (accessPoint == null || accessPoint.isEmpty) return [];
       final user = await LocalStorageService.getUser();
-      final empId = employeeId ?? user?.employeeId ?? 1;
+      final empId = employeeId ?? user?.employeeId ?? 0;
+      if (empId <= 0) return [];
 
       final url = AppUrls.getHistoryAttendanceUrl(
         accessPoint: accessPoint,
@@ -133,7 +136,7 @@ class AttendanceService {
     }
   }
 
-  /// POST /api/HRM/Attendance/v1/Save/{id}/{userId}/{timeStamp}/{accessPoint}
+  /// POST /api/Construction/Attendance/v1/Save/{id}/{userId}/{timeStamp}/{accessPoint}
   Future<AttendanceSaveResult> saveAttendanceWithResult({
     required int branchId,
     required int employeeId,

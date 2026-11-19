@@ -155,6 +155,16 @@ class _DashboardPageState extends State<DashboardPage> {
     }
     final branchId = resolvedBranchId ?? 1;
 
+    final punchAnywhereFlag =
+        await LocalStorageService.getOnlinePunchAnywhere();
+    final canPunchAnywhere =
+        (user?.canPunchAnywhere ?? false) || punchAnywhereFlag == 1;
+    final effectiveHomeBranchId =
+        await LocalStorageService.getEffectiveUserBranchId();
+    final punchBranchId = (!canPunchAnywhere && effectiveHomeBranchId > 0)
+        ? effectiveHomeBranchId
+        : branchId;
+
     // 2. Fetch all dashboard data concurrently in parallel using Future.wait
     try {
       final results = await Future.wait([
@@ -169,11 +179,11 @@ class _DashboardPageState extends State<DashboardPage> {
             : Future.value(_financialYears),
         _attendanceService.fetchMonthlyAttendanceLogs(date: formattedDate),
         _attendanceService.fetchLastAttendance(
-          branchId: branchId,
+          branchId: punchBranchId,
           employeeId: empId,
         ),
         _attendanceService.fetchHistoryAttendance(
-          branchId: branchId,
+          branchId: punchBranchId,
           employeeId: empId,
         ),
         _menuService.fetchMenus(),
@@ -284,6 +294,15 @@ class _DashboardPageState extends State<DashboardPage> {
       } else if (dashboardLeaves.isNotEmpty) {
         for (final item in dashboardLeaves) {
           final name = item['LeaveName']?.toString() ?? 'Leave';
+          final lower = name.trim().toLowerCase();
+          if (lower.contains('loss of pay') ||
+              lower == 'lop' ||
+              lower.contains('(lop)') ||
+              lower.contains('l.o.p') ||
+              lower.contains('lossofpay') ||
+              lower.contains('unpaid')) {
+            continue;
+          }
           final empCount =
               (item['EmployeesTakenLeave'] as num?)?.toDouble() ?? 0.0;
           final totalDays = (item['TotalLeaveDays'] as num?)?.toDouble() ?? 0.0;
@@ -519,13 +538,23 @@ class _DashboardPageState extends State<DashboardPage> {
     if (currentBranch == null) return;
     try {
       final user = await LocalStorageService.getUser();
+      final punchAnywhereFlag =
+          await LocalStorageService.getOnlinePunchAnywhere();
+      final canPunchAnywhere =
+          (user?.canPunchAnywhere ?? false) || punchAnywhereFlag == 1;
+      final effectiveHomeBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
+      final targetBranchId = (!canPunchAnywhere && effectiveHomeBranchId > 0)
+          ? effectiveHomeBranchId
+          : currentBranch.id;
+
       final results = await Future.wait([
         _attendanceService.fetchLastAttendance(
-          branchId: currentBranch.id,
+          branchId: targetBranchId,
           employeeId: user?.employeeId,
         ),
         _attendanceService.fetchHistoryAttendance(
-          branchId: currentBranch.id,
+          branchId: targetBranchId,
           employeeId: user?.employeeId,
         ),
       ]);
@@ -553,9 +582,20 @@ class _DashboardPageState extends State<DashboardPage> {
         return FutureBuilder<List<LastAttendanceModel>>(
           future: () async {
             final user = await LocalStorageService.getUser();
+            final punchAnywhereFlag =
+                await LocalStorageService.getOnlinePunchAnywhere();
+            final canPunchAnywhere =
+                (user?.canPunchAnywhere ?? false) || punchAnywhereFlag == 1;
+            final effectiveHomeBranchId =
+                await LocalStorageService.getEffectiveUserBranchId();
+            final targetBranchId =
+                (!canPunchAnywhere && effectiveHomeBranchId > 0)
+                    ? effectiveHomeBranchId
+                    : currentBranch.id;
+
             final serverHistory = await _attendanceService
                 .fetchHistoryAttendance(
-                  branchId: currentBranch.id,
+                  branchId: targetBranchId,
                   employeeId: user?.employeeId,
                 );
 
@@ -673,24 +713,45 @@ class _DashboardPageState extends State<DashboardPage> {
       '[CheckIn] OnlinePunchAnywhere: $punchAnywhereFlag, canPunchAnywhere: $canPunchAnywhere',
     );
 
+    final effectiveHomeBranchId =
+        await LocalStorageService.getEffectiveUserBranchId();
+    final effectiveHomeBranchName =
+        await LocalStorageService.getEffectiveUserBranchName();
+
     final savedBranchId =
         await LocalStorageService.getSelectedBranchId() ??
         _selectedBranch?.value ??
         1;
     final cachedBranches = await LocalStorageService.getBranches();
     BranchModel? branch;
-    try {
-      branch = cachedBranches.firstWhere((b) => b.value == savedBranchId);
-    } catch (_) {
-      branch = _selectedBranch;
-    }
+    if (!canPunchAnywhere && effectiveHomeBranchId > 0) {
+      try {
+        branch = cachedBranches.firstWhere(
+          (b) => b.value == effectiveHomeBranchId,
+        );
+      } catch (_) {
+        branch = BranchModel(
+          value: effectiveHomeBranchId,
+          name: effectiveHomeBranchName ?? 'Home Branch',
+        );
+      }
+      debugPrint(
+        '[CheckIn] Locked to Dedicated Home Branch: ${branch.name} (ID: ${branch.id})',
+      );
+    } else {
+      try {
+        branch = cachedBranches.firstWhere((b) => b.value == savedBranchId);
+      } catch (_) {
+        branch = _selectedBranch;
+      }
 
-    branch ??= (cachedBranches.isNotEmpty
-        ? cachedBranches.first
-        : _selectedBranch);
+      branch ??= (cachedBranches.isNotEmpty
+          ? cachedBranches.first
+          : _selectedBranch);
 
-    if (branch != null) {
-      _selectedBranch = branch;
+      if (branch != null) {
+        _selectedBranch = branch;
+      }
     }
 
     debugPrint('[CheckIn] Saved Branch ID: $savedBranchId');

@@ -19,6 +19,7 @@ class _ClaimsPageState extends State<ClaimsPage> {
 
   List<ClaimModel> _claims = [];
   UserRightsModel? _userRights;
+  String? _homeBranchName;
   bool _isLoading = true;
 
   DateTime? _filterFromDate;
@@ -32,7 +33,12 @@ class _ClaimsPageState extends State<ClaimsPage> {
 
   Future<void> _loadClaimsData() async {
     setState(() => _isLoading = true);
-    final rightsFuture = _claimService.fetchClaimUserRights();
+    final effectiveBranchId =
+        await LocalStorageService.getEffectiveUserBranchId();
+    final branchName =
+        await LocalStorageService.getEffectiveUserBranchName();
+    final rightsFuture =
+        _claimService.fetchClaimUserRights(branchId: effectiveBranchId);
 
     final fDate = _filterFromDate != null
         ? DateFormat('dd/MM/yyyy').format(_filterFromDate!)
@@ -53,6 +59,7 @@ class _ClaimsPageState extends State<ClaimsPage> {
       setState(() {
         _userRights = results[0] as UserRightsModel?;
         _claims = results[1] as List<ClaimModel>;
+        _homeBranchName = branchName;
         _isLoading = false;
       });
       debugPrint('📋 [ClaimsPage] Loaded ${_claims.length} claims for period "$fDate" - "$tDate"');
@@ -350,12 +357,27 @@ class _ClaimsPageState extends State<ClaimsPage> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: const Text(
-          'Claims & Reimbursements',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Claims & Reimbursements',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            if (_homeBranchName != null && _homeBranchName!.isNotEmpty)
+              Text(
+                _homeBranchName!,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+          ],
         ),
         actions: [
           IconButton(

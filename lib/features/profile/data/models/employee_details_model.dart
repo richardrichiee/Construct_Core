@@ -21,10 +21,24 @@ class LeaveBalanceItem {
         lower == 'lop' ||
         lower.contains('(lop)') ||
         lower.startsWith('lop ') ||
-        lower.endsWith(' lop');
+        lower.endsWith(' lop') ||
+        lower.contains('l.o.p') ||
+        lower.contains('lossofpay') ||
+        lower.contains('unpaid');
   }
 
   factory LeaveBalanceItem.fromJson(Map<String, dynamic> json) {
+    final parsedName = json['LeaveName']?.toString() ?? 'Leave';
+    final lower = parsedName.trim().toLowerCase();
+    final isLop = lower.contains('loss of pay') ||
+        lower == 'lop' ||
+        lower.contains('(lop)') ||
+        lower.startsWith('lop ') ||
+        lower.endsWith(' lop') ||
+        lower.contains('l.o.p') ||
+        lower.contains('lossofpay') ||
+        lower.contains('unpaid');
+
     final closingVal = (json['Closing'] as num?)?.toDouble() ??
         (json['Balance'] as num?)?.toDouble() ??
         (json['BalanceLeaves'] as num?)?.toDouble() ??
@@ -40,10 +54,10 @@ class LeaveBalanceItem {
 
     return LeaveBalanceItem(
       leaveId: json['LeaveID'] ?? json['LeaveId'] ?? 0,
-      leaveName: json['LeaveName']?.toString() ?? 'Leave',
-      opening: openingVal,
+      leaveName: parsedName,
+      opening: isLop ? 0.0 : openingVal,
       taken: takenVal,
-      closing: closingVal,
+      closing: isLop ? 0.0 : closingVal,
     );
   }
 
@@ -124,9 +138,9 @@ class EmployeeDetailsModel {
           grouped[key] = LeaveBalanceItem(
             leaveId: parsed.leaveId > 0 ? parsed.leaveId : existing.leaveId,
             leaveName: preferredName,
-            opening: existing.opening + parsed.opening,
+            opening: parsed.isLossOfPay ? 0.0 : (existing.opening + parsed.opening),
             taken: existing.taken + parsed.taken,
-            closing: existing.closing + parsed.closing,
+            closing: parsed.isLossOfPay ? 0.0 : (existing.closing + parsed.closing),
           );
         } else {
           grouped[key] = parsed;

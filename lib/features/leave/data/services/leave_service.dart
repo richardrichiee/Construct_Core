@@ -963,6 +963,7 @@ class LeaveService {
           );
           final rights = await UserRightsService().fetchUserRights(
             menuCode: leaveCancelMenuCode,
+            branchId: homeBranchId,
           );
           if (rights.transactions == 3) {
             finalApprovalStatus = 'A';
@@ -1022,9 +1023,23 @@ class LeaveService {
           if (data['value'] is List && (data['value'] as List).isNotEmpty) {
             final first = (data['value'] as List).first;
             if (first is Map) {
-              final errMsg = first['ERRORMESSAGE']?.toString().trim() ?? '';
+              final errMsg = (first['ERRORMESSAGE'] ??
+                      first['ErrorMessage'] ??
+                      first['Message'])
+                  ?.toString()
+                  .trim() ??
+                  '';
               if (errMsg.isNotEmpty) {
-                return false;
+                final lower = errMsg.toLowerCase();
+                final isSuccess = lower.contains('success') ||
+                    lower.contains('saved') ||
+                    lower.contains('deleted') ||
+                    lower.contains('ok') ||
+                    lower == '1' ||
+                    lower == 'true';
+                if (!isSuccess) {
+                  return false;
+                }
               }
             }
           }

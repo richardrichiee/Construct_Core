@@ -43,15 +43,14 @@ class ClaimService {
   }
 
   /// GET /api/Construction/General/v1/GetUserRights/{timeStamp}/{accessPoint}/15/{userId}/{branchId}
-  Future<UserRightsModel?> fetchClaimUserRights() async {
+  Future<UserRightsModel?> fetchClaimUserRights({int? branchId}) async {
     try {
       final accessPoint = await _getValidAccessPoint();
       if (accessPoint == null) return UserRightsModel.noAccess();
       final user = await LocalStorageService.getUser();
       final userId = user?.userId ?? 2;
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
-      final branchId =
-          (savedBranchId != null && savedBranchId > 0) ? savedBranchId : 1;
+      final effectiveBranchId =
+          branchId ?? await LocalStorageService.getEffectiveUserBranchId();
 
       final claimMenuCode = await LocalStorageService.getMenuCodeForModule(
         MenuModuleType.claim,
@@ -62,7 +61,7 @@ class ClaimService {
         accessPoint: accessPoint,
         menuCode: claimMenuCode,
         userId: userId,
-        branchId: branchId,
+        branchId: effectiveBranchId,
       );
 
       final response = await _dio.get(
@@ -259,6 +258,10 @@ class ClaimService {
       debugPrint('💰 Total Amount: $totalAmount');
       debugPrint('📝 Remarks: $remarks');
 
+      final effectiveBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
+      final branchId = effectiveBranchId.toString();
+
       // Check transaction hierarchy from UserRights (dynamic Claim MenuCode):
       // If hierarchy is required (HeirarchyNeeded == 1) but not assigned to this user, block submission.
       // If transactions == 3, the user has Level 3 approval authority (Manager) -> Approve directly ('A')
@@ -270,6 +273,7 @@ class ClaimService {
         );
         final rights = await UserRightsService().fetchUserRights(
           menuCode: claimMenuCode,
+          branchId: effectiveBranchId,
         );
         debugPrint(
           '🔑 UserRights for MenuCode $claimMenuCode: transactions=${rights.transactions}, hierarchyNeeded=${rights.heirarchyNeeded}, hierarchyId=${rights.hierarchyId}, userCode=${rights.userCode}',
@@ -304,10 +308,6 @@ class ClaimService {
         }
         return json;
       }).toList();
-
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
-      final branchId =
-          (savedBranchId != null && savedBranchId > 0) ? savedBranchId.toString() : "1";
 
       final payload = {
         "Head": {
@@ -741,15 +741,14 @@ class ClaimService {
       if (accessPoint == null) return [];
       final user = await LocalStorageService.getUser();
       final userId = user?.userId ?? 2;
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
-      final branchId =
-          (savedBranchId != null && savedBranchId > 0) ? savedBranchId : 1;
+      final effectiveBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
 
       final url = AppUrls.getClaimEmpSearchUrl(accessPoint: accessPoint);
 
       final payload = {
         "Head": {
-          "BranchID": branchId.toString(),
+          "BranchID": effectiveBranchId.toString(),
           "UserID": userId.toString(),
           "FromDate": (fromDate != null && fromDate.isNotEmpty)
               ? fromDate

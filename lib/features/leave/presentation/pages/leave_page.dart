@@ -670,7 +670,12 @@ class _LeavePageState extends State<LeavePage> {
 
                                       setState(() {
                                         _cancellingKeys.add(summaryItem.key);
+                                        _pendingCancellationKeys.add(summaryItem.key);
                                       });
+                                      await LocalStorageService
+                                          .addPendingLeaveCancellationKey(
+                                            summaryItem.key,
+                                          );
 
                                       final messenger =
                                           ScaffoldMessenger.of(context);
@@ -711,18 +716,14 @@ class _LeavePageState extends State<LeavePage> {
                                           _cancellingKeys.remove(
                                             summaryItem.key,
                                           );
-                                          if (success) {
-                                            _pendingCancellationKeys.add(
+                                          if (!success) {
+                                            _pendingCancellationKeys.remove(
                                               summaryItem.key,
                                             );
                                           }
                                         });
                                         messenger.hideCurrentSnackBar();
                                         if (success) {
-                                          await LocalStorageService
-                                              .addPendingLeaveCancellationKey(
-                                                summaryItem.key,
-                                              );
                                           messenger.showSnackBar(
                                             const SnackBar(
                                               content: Text(
@@ -733,6 +734,10 @@ class _LeavePageState extends State<LeavePage> {
                                           );
                                           _loadLeaveData();
                                         } else {
+                                          await LocalStorageService
+                                              .removePendingLeaveCancellationKey(
+                                                summaryItem.key,
+                                              );
                                           messenger.showSnackBar(
                                             const SnackBar(
                                               content: Text(

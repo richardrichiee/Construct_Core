@@ -32,6 +32,7 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
 
   final List<ClaimTailItem> _tailItems = [];
   bool _isLoadingCategories = true;
+  bool _isLoadingRights = true;
   bool _isSubmitting = false;
   bool _isRateStatic = false;
   String _currentRateFlag = '0';
@@ -49,15 +50,25 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
         MenuModuleType.claim,
         fallback: 5121,
       );
+      final effectiveBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
       final rights = await _userRightsService.fetchUserRights(
         menuCode: claimMenuCode,
+        branchId: effectiveBranchId,
       );
       if (mounted) {
         setState(() {
           _userRights = rights;
+          _isLoadingRights = false;
         });
       }
-    } catch (_) {}
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isLoadingRights = false;
+        });
+      }
+    }
   }
 
   @override
@@ -156,22 +167,64 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
   Future<void> _submitClaim() async {
     if (_isSubmitting) return;
 
+    setState(() {
+      _isSubmitting = true;
+    });
+
     if (_userRights?.isHierarchyMissing == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Need to set Hierarchy for this user'),
-          backgroundColor: AppColors.error,
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 24),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Hierarchy Required',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'Need to set Hierarchy for this user',
+            style: TextStyle(fontSize: 14),
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
         ),
       );
       return;
     }
 
-    if (_tailItems.isEmpty) {
+    final itemsToSubmit = List<ClaimTailItem>.from(_tailItems);
+    if (itemsToSubmit.isEmpty) {
       final rate = double.tryParse(_rateController.text.trim()) ?? 0.0;
       final qty = double.tryParse(_qtyController.text.trim()) ?? 0.0;
       final reason = _reasonController.text.trim();
 
       if (_selectedCategory == null || rate <= 0 || qty <= 0) {
+        if (mounted) {
+          setState(() => _isSubmitting = false);
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -184,7 +237,7 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
       }
 
       final dateStr = DateFormat('dd/MM/yyyy').format(_itemDate);
-      _tailItems.add(
+      itemsToSubmit.add(
         ClaimTailItem(
           claimId: _selectedCategory!.value.toString(),
           claimName: _selectedCategory!.name,
@@ -198,28 +251,26 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
       );
     }
 
-    setState(() {
-      _isSubmitting = true;
-    });
-
     final claimDateStr = DateFormat('dd/MM/yyyy').format(_claimDate);
     final remarks = _remarksController.text.trim().isNotEmpty
         ? _remarksController.text.trim()
-        : (_tailItems.isNotEmpty ? _tailItems.first.reason : '');
+        : (itemsToSubmit.isNotEmpty ? itemsToSubmit.first.reason : '');
+    final totalAmount =
+        itemsToSubmit.fold(0.0, (sum, item) => sum + item.amount);
 
     final isApproverLevel3 = _userRights?.transactions == 3;
 
     debugPrint('====================================================');
-    debugPrint('📝 [ApplyClaimDialog] User tapped Submit Claim:');
-    debugPrint('   Date: $claimDateStr, Total: ₹$_totalClaimAmount, Remarks: $remarks');
+    debugPrint('📝 [ApplyClaimDialog] Submitting Claim (debounced):');
+    debugPrint('   Date: $claimDateStr, Total: ₹$totalAmount, Remarks: $remarks');
     debugPrint('   Approver Level 3 (Manager): $isApproverLevel3');
-    debugPrint('   Tail Items Count: ${_tailItems.length}');
+    debugPrint('   Tail Items Count: ${itemsToSubmit.length}');
 
     final result = await _claimService.saveClaimFormWithResult(
       claimDate: claimDateStr,
       remarks: remarks,
-      totalAmount: _totalClaimAmount,
-      tailItems: _tailItems,
+      totalAmount: totalAmount,
+      tailItems: itemsToSubmit,
       approvalStatus: isApproverLevel3 ? 'A' : 'N',
     );
 
@@ -659,6 +710,7 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
                       width: double.infinity,
                       child: ElevatedButton(
                         onPressed: (_isSubmitting ||
+                                _isLoadingRights ||
                                 (_userRights?.isHierarchyMissing == true) ||
                                 (_tailItems.isEmpty &&
                                     (_selectedCategory == null ||

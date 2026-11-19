@@ -263,7 +263,11 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
       }
 
       final cachedBranches = await LocalStorageService.getBranches();
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
+      // Daily Attendance strictly belongs to the user's dedicated home/default branch from login
+      final effectiveBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
+      final homeBranchName =
+          await LocalStorageService.getEffectiveUserBranchName();
 
       var branches = cachedBranches;
       if (branches.isEmpty) {
@@ -272,14 +276,21 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
 
       BranchModel? selectedBranch;
       if (branches.isNotEmpty) {
-        if (savedBranchId != null) {
+        if (effectiveBranchId > 0) {
           selectedBranch = branches.firstWhere(
-            (b) => b.value == savedBranchId,
+            (b) => b.value == effectiveBranchId,
             orElse: () => branches.first,
           );
         } else {
           selectedBranch = branches.first;
         }
+      } else if (effectiveBranchId > 0) {
+        selectedBranch = BranchModel(
+          value: effectiveBranchId,
+          name: homeBranchName.isNotEmpty ? homeBranchName : 'Head Office',
+          branchStartTime: branchStartTime,
+          branchEndTime: branchEndTime,
+        );
       }
 
       if (widget.initialBranchStartTime == null &&
@@ -1086,13 +1097,28 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
       child: Scaffold(
         backgroundColor: const Color(0xFFF8FAFC),
         appBar: AppBar(
-          title: Text(
-            'Daily Attendance',
-            style: GoogleFonts.plusJakartaSans(
-              fontWeight: FontWeight.bold,
-              fontSize: 18,
-              color: const Color(0xFF0F172A),
-            ),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Daily Attendance',
+                style: GoogleFonts.plusJakartaSans(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  color: const Color(0xFF0F172A),
+                ),
+              ),
+              if (_selectedBranch != null && _selectedBranch!.name.isNotEmpty)
+                Text(
+                  _selectedBranch!.name,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    color: const Color(0xFF64748B),
+                  ),
+                ),
+            ],
           ),
           backgroundColor: Colors.white,
           elevation: 0,

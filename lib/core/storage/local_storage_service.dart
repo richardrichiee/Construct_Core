@@ -101,6 +101,20 @@ class LocalStorageService {
       await prefs.setBool(keyIsLoggedIn, true);
       await prefs.setString(keyBranchStartTime, user.branchStartTime);
       await prefs.setString(keyBranchEndTime, user.branchEndTime);
+      if (user.branchId > 0) {
+        await prefs.setInt(keyUserDefaultBranchId, user.branchId);
+        await _storage.write(
+          key: keyUserDefaultBranchId,
+          value: user.branchId.toString(),
+        );
+      }
+      if (user.branchName.isNotEmpty) {
+        await prefs.setString(keyUserDefaultBranchName, user.branchName);
+        await _storage.write(
+          key: keyUserDefaultBranchName,
+          value: user.branchName,
+        );
+      }
       await _storage.write(key: keyUserData, value: userJson);
       await _storage.write(key: keyIsLoggedIn, value: 'true');
       await _storage.write(key: keyBranchStartTime, value: user.branchStartTime);
@@ -211,6 +225,8 @@ class LocalStorageService {
       await prefs.remove(keyLastPunchTime);
       await prefs.remove(keyCachedBranches);
       await prefs.remove(keySelectedBranchId);
+      await prefs.remove(keyUserDefaultBranchId);
+      await prefs.remove(keyUserDefaultBranchName);
       await prefs.remove(keyCachedMenus);
       await prefs.remove(keyBiometricVerified);
       await prefs.remove(keyLastLoginTimestamp);
@@ -222,7 +238,10 @@ class LocalStorageService {
       await _storage.delete(key: keyLastLoginTimestamp);
       await _storage.delete(key: keyBranchStartTime);
       await _storage.delete(key: keyBranchEndTime);
+      await _storage.delete(key: keyUserDefaultBranchId);
+      await _storage.delete(key: keyUserDefaultBranchName);
       await _storage.delete(key: keySessionPassword);
+      await prefs.remove(keyPendingLeaveCancellationKeys);
     } catch (_) {}
   }
 
@@ -494,12 +513,154 @@ class LocalStorageService {
     }
   }
 
+  static const String keyUserDefaultBranchId = 'key_user_default_branch_id';
+
+  static Future<void> saveUserDefaultBranchId(int branchId) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.setInt(keyUserDefaultBranchId, branchId);
+      await _storage.write(
+        key: keyUserDefaultBranchId,
+        value: branchId.toString(),
+      );
+    } catch (_) {}
+  }
+
+  static Future<int?> getUserDefaultBranchId() async {
+    try {
+      final prefs = await _getPrefs();
+      final cached = prefs.getInt(keyUserDefaultBranchId);
+      if (cached != null && cached > 0) return cached;
+      final secVal = await _storage.read(key: keyUserDefaultBranchId);
+      if (secVal != null && secVal.isNotEmpty) {
+        final parsed = int.tryParse(secVal);
+        if (parsed != null && parsed > 0) return parsed;
+      }
+      final user = await getUser();
+      if (user != null && user.branchId > 0) {
+        return user.branchId;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Returns the employee's dedicated home/default branch ID (from login/profile).
+  /// This is used for operations like Leave Application that strictly belong to
+  /// the employee's assigned home branch, regardless of the active drawer branch.
+  static Future<int> getEffectiveUserBranchId() async {
+    try {
+      final defaultBranchId = await getUserDefaultBranchId();
+      if (defaultBranchId != null && defaultBranchId > 0) {
+        return defaultBranchId;
+      }
+      final selectedBranchId = await getSelectedBranchId();
+      if (selectedBranchId != null && selectedBranchId > 0) {
+        return selectedBranchId;
+      }
+    } catch (_) {}
+    return 1;
+  }
+
+  static const String keyUserDefaultBranchName = 'key_user_default_branch_name';
+
+  static Future<void> saveUserDefaultBranchName(String branchName) async {
+    try {
+      final prefs = await _getPrefs();
+      await prefs.setString(keyUserDefaultBranchName, branchName);
+      await _storage.write(key: keyUserDefaultBranchName, value: branchName);
+    } catch (_) {}
+  }
+
+  static Future<String?> getUserDefaultBranchName() async {
+    try {
+      final prefs = await _getPrefs();
+      final cached = prefs.getString(keyUserDefaultBranchName);
+      if (cached != null && cached.isNotEmpty) return cached;
+      final secVal = await _storage.read(key: keyUserDefaultBranchName);
+      if (secVal != null && secVal.isNotEmpty) return secVal;
+      final user = await getUser();
+      if (user != null && user.branchName.isNotEmpty) {
+        return user.branchName;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Returns the employee's dedicated home/default branch Name (from login/profile).
+  static Future<String> getEffectiveUserBranchName() async {
+    try {
+      final defaultName = await getUserDefaultBranchName();
+      if (defaultName != null && defaultName.isNotEmpty) {
+        return defaultName;
+      }
+      final defaultId = await getUserDefaultBranchId();
+      final branches = await getBranches();
+      if (defaultId != null && defaultId > 0 && branches.isNotEmpty) {
+        for (final b in branches) {
+          if (b.value == defaultId && b.name.isNotEmpty) {
+            return b.name;
+          }
+        }
+      }
+      final selectedId = await getSelectedBranchId();
+      if (selectedId != null && selectedId > 0 && branches.isNotEmpty) {
+        for (final b in branches) {
+          if (b.value == selectedId && b.name.isNotEmpty) {
+            return b.name;
+          }
+        }
+      }
+      if (branches.isNotEmpty) {
+        return branches.first.name;
+      }
+    } catch (_) {}
+    return '';
+  }
+
   static const String keyBiometricEnabled = 'key_biometric_enabled';
   static const String keyBiometricOnlyMode = 'key_biometric_only_mode';
   static const String keyBiometricLoginId = 'key_biometric_login_id';
   static const String keyBiometricPassword = 'key_biometric_password';
   static const String keyBiometricVerified = 'key_biometric_verified';
   static const String keySessionPassword = 'key_session_password';
+  static const String keyPendingLeaveCancellationKeys =
+      'key_pending_leave_cancellation_keys';
+
+  static Future<Set<int>> getPendingLeaveCancellationKeys() async {
+    try {
+      final prefs = await _getPrefs();
+      final list = prefs.getStringList(keyPendingLeaveCancellationKeys) ?? [];
+      return list.map((e) => int.tryParse(e)).whereType<int>().toSet();
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static Future<void> addPendingLeaveCancellationKey(int key) async {
+    if (key <= 0) return;
+    try {
+      final prefs = await _getPrefs();
+      final existing = await getPendingLeaveCancellationKeys();
+      existing.add(key);
+      await prefs.setStringList(
+        keyPendingLeaveCancellationKeys,
+        existing.map((e) => e.toString()).toList(),
+      );
+    } catch (_) {}
+  }
+
+  static Future<void> removePendingLeaveCancellationKey(int key) async {
+    try {
+      final prefs = await _getPrefs();
+      final existing = await getPendingLeaveCancellationKeys();
+      if (existing.remove(key)) {
+        await prefs.setStringList(
+          keyPendingLeaveCancellationKeys,
+          existing.map((e) => e.toString()).toList(),
+        );
+      }
+    } catch (_) {}
+  }
 
   static Future<void> saveSessionPassword(String password) async {
     try {

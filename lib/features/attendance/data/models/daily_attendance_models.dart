@@ -133,7 +133,15 @@ class DailyAttendanceWorkerItem {
     required this.date,
   });
 
-  bool get isPayrollProcessed => wageFlag == 1;
+  bool get isPayrollProcessed => wageFlag != 0;
+
+  static int _parseFlag(dynamic raw) {
+    if (raw == null) return 0;
+    if (raw is bool) return raw ? 1 : 0;
+    final s = raw.toString().trim().toLowerCase();
+    if (s == 'true') return 1;
+    return int.tryParse(s) ?? 0;
+  }
 
   int? get inTimeMinutes => _toMinutes(inTime, inTimeMr);
   int? get outTimeMinutes => _toMinutes(outTime, outTimeMr);
@@ -180,8 +188,9 @@ class DailyAttendanceWorkerItem {
     return DailyAttendanceWorkerItem(
       dailyAttendId:
           int.tryParse(json['DailyAttendID']?.toString() ?? '0') ?? 0,
-      wageFlag:
-          int.tryParse(json['WageFlag']?.toString() ?? '0') ?? 0,
+      wageFlag: _parseFlag(
+        json['WageFlag'] ?? json['wageFlag'] ?? json['Wageflag'],
+      ),
       employeeId:
           json['EmployeeID']?.toString() ??
           json['EmployeeId']?.toString() ??

@@ -142,6 +142,14 @@ class _DashboardPageState extends State<DashboardPage> {
         if (prefetchedBranches.isNotEmpty) {
           resolvedBranchId = prefetchedBranches.first.id;
           await LocalStorageService.saveSelectedBranchId(resolvedBranchId);
+          final existingDefault =
+              await LocalStorageService.getUserDefaultBranchId();
+          if (existingDefault == null || existingDefault <= 0) {
+            await LocalStorageService.saveUserDefaultBranchId(resolvedBranchId);
+            await LocalStorageService.saveUserDefaultBranchName(
+              prefetchedBranches.first.name,
+            );
+          }
         }
       } catch (_) {}
     }
@@ -256,6 +264,9 @@ class _DashboardPageState extends State<DashboardPage> {
 
       if (employeeDetails != null && employeeDetails.leaveBalances.isNotEmpty) {
         for (final bal in employeeDetails.leaveBalances) {
+          // Exclude Loss of Pay (LOP) from paid leave balance totals/chart
+          // so cancelled LOP never gets added to available leave balances.
+          if (bal.isLossOfPay) continue;
           final name = bal.leaveName;
           final color = distinctColors[colorIdx % distinctColors.length];
           colorIdx++;

@@ -120,11 +120,17 @@ class AuthService {
 
           // Save user session in local storage
           await LocalStorageService.saveUser(user);
+          if (user.branchId > 0) {
+            await LocalStorageService.saveUserDefaultBranchId(user.branchId);
+          }
+          if (user.branchName.isNotEmpty) {
+            await LocalStorageService.saveUserDefaultBranchName(user.branchName);
+          }
           await LocalStorageService.saveSessionPassword(password);
           await LocalStorageService.saveOnlinePunchAnywhere(user.onlinePunchAnywhere);
           await LocalStorageService.setBiometricVerified(false);
           debugPrint(
-            '💾 [AuthService] Saved user session. OnlinePunchAnywhere: ${user.onlinePunchAnywhere}, PunchNeeded: ${user.punchNeeded}, BranchStartTime: ${user.branchStartTime}, BranchEndTime: ${user.branchEndTime}',
+            '💾 [AuthService] Saved user session. Home BranchID: ${user.branchId}, Home BranchName: "${user.branchName}", OnlinePunchAnywhere: ${user.onlinePunchAnywhere}, PunchNeeded: ${user.punchNeeded}, BranchStartTime: ${user.branchStartTime}, BranchEndTime: ${user.branchEndTime}',
           );
 
           return LoginResult(

@@ -270,6 +270,15 @@ class AppUrls {
     return '${baseUrl}api/Construction/General/v1/Reject/$time/$accessPoint';
   }
 
+  /// Endpoint: GET /api/Construction/LeaveCancellation/v1/List/{Page}/{timeStamp}/{accessPoint}
+  static String getLeaveCancellationListUrl({
+    int page = 1,
+    required String accessPoint,
+  }) {
+    final time = timestamp;
+    return '${baseUrl}api/Construction/LeaveCancellation/v1/List/$page/$time/$accessPoint';
+  }
+
   /// Endpoint: GET /api/Construction/LeaveCancellation/v1/Get/{id}/{timeStamp}/{accessPoint}
   static String getLeaveCancellationDetailsUrl({
     required int key,

@@ -208,10 +208,11 @@ class LeaveService {
                 ? user.userId.toString()
                 : '26');
 
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
-      final branchId = (savedBranchId != null && savedBranchId > 0)
-          ? savedBranchId.toString()
-          : "1";
+      // Dedicated default/home branch ID from user login/profile.
+      // Leave application calculations strictly belong to the employee's dedicated branch.
+      final effectiveBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
+      final branchId = effectiveBranchId.toString();
 
       final url = AppUrls.getLeaveApplicationCalculationUrl(
         accessPoint: accessPoint,
@@ -398,10 +399,11 @@ class LeaveService {
                 ? user.userId.toString()
                 : '26');
 
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
-      final branchId = (savedBranchId != null && savedBranchId > 0)
-          ? savedBranchId.toString()
-          : "1";
+      // Dedicated default/home branch ID from user login/profile.
+      // Leave application calculations strictly belong to the employee's dedicated branch.
+      final effectiveBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
+      final branchId = effectiveBranchId.toString();
 
       // Check transaction hierarchy from UserRights (dynamic Leave Application MenuCode):
       // 1 = No hierarchy, 2 = Forward, 3 = Approve/Reject
@@ -415,6 +417,7 @@ class LeaveService {
           );
           final rights = await UserRightsService().fetchUserRights(
             menuCode: leaveMenuCode,
+            branchId: effectiveBranchId,
           );
           if (rights.transactions == 3) {
             finalApprovalStatus = 'A';
@@ -810,6 +813,88 @@ class LeaveService {
     }
   }
 
+  /// GET /api/Construction/LeaveCancellation/v1/List/{Page}/{timeStamp}/{accessPoint}
+  Future<List<Map<String, dynamic>>> fetchLeaveCancellationList({
+    int page = 1,
+  }) async {
+    try {
+      final accessPoint = await _getValidAccessPoint();
+      if (accessPoint == null) return [];
+      final url = AppUrls.getLeaveCancellationListUrl(
+        page: page,
+        accessPoint: accessPoint,
+      );
+
+      final response = await _dio.get(
+        url,
+        options: Options(headers: {'Accept': 'application/json'}),
+      );
+
+      if (response.statusCode == 200 && response.data != null) {
+        final data = response.data;
+        if (data is Map && data['value'] is List) {
+          return (data['value'] as List)
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+        }
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Checks whether the server's LeaveCancellation list already contains a
+  /// non-rejected cancellation request for this leave application.
+  static bool hasMatchingActiveCancellation(
+    LeaveApplicationModel app,
+    List<Map<String, dynamic>> cancellations,
+  ) {
+    final appEmp = app.employee.trim().toLowerCase();
+    final appLeave = app.leaveName.trim().toLowerCase();
+    final appFrom = app.fromDate.trim();
+    final appTo = app.toDate.trim();
+
+    for (final c in cancellations) {
+      final status = (c['Status'] ?? c['ApprovalStatus'] ?? '')
+          .toString()
+          .trim()
+          .toUpperCase();
+      if (status == 'R' || status == 'REJECT' || status == 'REJECTED') {
+        continue;
+      }
+
+      // Direct LvApplicationID match if provided by backend
+      final lvAppId = (c['LvApplicationID'] ?? c['LvApplicationId'])
+          ?.toString()
+          .trim();
+      if (lvAppId != null &&
+          lvAppId.isNotEmpty &&
+          lvAppId != '0' &&
+          lvAppId == app.key.toString()) {
+        return true;
+      }
+
+      // Composite match on Employee + Leave + FromDate + ToDate
+      final cEmp = (c['Employee'] ?? '').toString().trim().toLowerCase();
+      final cLeave = (c['Leave'] ?? c['LeaveName'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      final cFrom = (c['FromDate'] ?? '').toString().trim();
+      final cTo = (c['ToDate'] ?? '').toString().trim();
+
+      if (cFrom == appFrom &&
+          cTo == appTo &&
+          cLeave == appLeave &&
+          (cEmp.isEmpty || appEmp.isEmpty || cEmp == appEmp)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   Future<Map<String, dynamic>?> fetchLeaveCancellationDetails(int key) async {
     try {
       final accessPoint = await _getValidAccessPoint();
@@ -854,10 +939,9 @@ class LeaveService {
       if (accessPoint == null) return false;
       final user = await LocalStorageService.getUser();
       final userId = user?.userId ?? 2;
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
-      final defaultBranchId = (savedBranchId != null && savedBranchId > 0)
-          ? savedBranchId.toString()
-          : "1";
+      final homeBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
+      final defaultBranchId = homeBranchId.toString();
       final raw = itemData?['raw'] as Map<String, dynamic>?;
       String branchId =
           raw?['BranchID']?.toString() ??
@@ -875,7 +959,7 @@ class LeaveService {
           final leaveCancelMenuCode =
               await LocalStorageService.getMenuCodeForModule(
             MenuModuleType.leaveCancellation,
-            fallback: 5102,
+            fallback: 5106,
           );
           final rights = await UserRightsService().fetchUserRights(
             menuCode: leaveCancelMenuCode,
@@ -935,21 +1019,18 @@ class LeaveService {
         if (data is Map &&
             (data['error'] == null ||
                 (data['error'] is Map && (data['error'] as Map).isEmpty))) {
-          // Only directly cancel the leave application if user has Level 3 authority
-          // (finalApprovalStatus == 'A'). For regular employees (finalApprovalStatus == 'N'),
-          // the cancellation request is submitted for manager approval — do NOT
-          // overwrite the leave status here, so the manager can see and act on it.
-          if (finalApprovalStatus == 'A') {
-            final key = int.tryParse(resolvedLvAppId);
-            if (key != null && key > 0) {
-              await updateLeaveApprovalStatus(
-                key: key,
-                approvalStatus: 'C',
-                itemData: itemData,
-                remarks: remarks,
-              );
+          if (data['value'] is List && (data['value'] as List).isNotEmpty) {
+            final first = (data['value'] as List).first;
+            if (first is Map) {
+              final errMsg = first['ERRORMESSAGE']?.toString().trim() ?? '';
+              if (errMsg.isNotEmpty) {
+                return false;
+              }
             }
           }
+          // LeaveCancellation/v1/Save handles the cancellation & status/balance update
+          // on the backend — do NOT redundantly call updateLeaveApprovalStatus('C'),
+          // which would overwrite the leave's original Reason and risk double-crediting.
           return true;
         }
       }
@@ -1041,10 +1122,9 @@ class LeaveService {
       if (accessPoint == null) return [];
       final user = await LocalStorageService.getUser();
       final userId = user?.userId ?? 2;
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
-      final branchId = (savedBranchId != null && savedBranchId > 0)
-          ? savedBranchId
-          : 1;
+      final effectiveBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
+      final branchId = effectiveBranchId;
 
       final url = AppUrls.getLeaveEmpSearchUrl(accessPoint: accessPoint);
 

@@ -21,6 +21,12 @@ class UserRightsModel {
     required this.heirarchyNeeded,
   });
 
+  /// True when the module requires an approval hierarchy (HeirarchyNeeded == 1),
+  /// but no approval hierarchy has been assigned to this user for the active branch
+  /// (UserCode == 0 and Transactions <= 1).
+  bool get isHierarchyMissing =>
+      heirarchyNeeded == 1 && userCode == 0 && transactions <= 1;
+
   factory UserRightsModel.fromJson(Map<String, dynamic> json) {
     return UserRightsModel(
       addRight: json['AddRight'] ?? false,

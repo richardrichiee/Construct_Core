@@ -13,6 +13,17 @@ class LeaveBalanceItem {
     required this.closing,
   });
 
+  /// True for Loss of Pay (LOP) leave types, which are unpaid and should not
+  /// accumulate or display a positive credited leave balance when cancelled.
+  bool get isLossOfPay {
+    final lower = leaveName.trim().toLowerCase();
+    return lower.contains('loss of pay') ||
+        lower == 'lop' ||
+        lower.contains('(lop)') ||
+        lower.startsWith('lop ') ||
+        lower.endsWith(' lop');
+  }
+
   factory LeaveBalanceItem.fromJson(Map<String, dynamic> json) {
     final closingVal = (json['Closing'] as num?)?.toDouble() ??
         (json['Balance'] as num?)?.toDouble() ??
@@ -62,6 +73,8 @@ class EmployeeDetailsModel {
   final int attendanceForTheMonth;
   final num noOfLeavesForTheMonth;
   final List<LeaveBalanceItem> leaveBalances;
+  final int branchId;
+  final String branchName;
 
   EmployeeDetailsModel({
     required this.empId,
@@ -78,6 +91,8 @@ class EmployeeDetailsModel {
     this.attendanceForTheMonth = 0,
     this.noOfLeavesForTheMonth = 0,
     this.leaveBalances = const [],
+    this.branchId = 0,
+    this.branchName = '',
   });
 
   factory EmployeeDetailsModel.fromJson(
@@ -145,6 +160,25 @@ class EmployeeDetailsModel {
           0,
       noOfLeavesForTheMonth: (json['NoOfLeavesforTheMonth'] as num?) ?? 0,
       leaveBalances: balances,
+      branchId: int.tryParse(
+            json['BranchID']?.toString() ??
+                json['BranchId']?.toString() ??
+                (table1 != null && table1.isNotEmpty && table1.first is Map
+                    ? (table1.first['BranchID']?.toString() ??
+                        table1.first['BranchId']?.toString())
+                    : null) ??
+                '0',
+          ) ??
+          0,
+      branchName: json['BranchName']?.toString() ??
+          json['Branch_Name']?.toString() ??
+          json['Branch']?.toString() ??
+          json['branchName']?.toString() ??
+          (table1 != null && table1.isNotEmpty && table1.first is Map
+              ? (table1.first['BranchName']?.toString() ??
+                  table1.first['Branch']?.toString())
+              : null) ??
+          '',
     );
   }
 
@@ -164,6 +198,8 @@ class EmployeeDetailsModel {
       'AttandanceForthemonth': attendanceForTheMonth,
       'NoOfLeavesforTheMonth': noOfLeavesForTheMonth,
       'LeaveBalances': leaveBalances.map((e) => e.toJson()).toList(),
+      'BranchID': branchId,
+      'BranchName': branchName,
     };
   }
 }

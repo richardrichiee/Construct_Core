@@ -25,16 +25,28 @@ class _LeavePageState extends State<LeavePage> {
   final _employeeService = EmployeeService();
 
   List<LeaveApplicationModel> _leaveApplications = [];
+  List<Map<String, dynamic>> _serverCancellations = [];
+  Set<int> _pendingCancellationKeys = {};
+  final Set<int> _cancellingKeys = {};
   UserRightsModel? _userRights;
   bool _isLoading = true;
 
   DateTime? _filterStartDate;
   DateTime? _filterEndDate;
+  String? _homeBranchName;
 
   @override
   void initState() {
     super.initState();
     _loadLeaveData();
+  }
+
+  bool _hasPendingCancellation(LeaveApplicationModel item) {
+    if (_pendingCancellationKeys.contains(item.key)) return true;
+    return LeaveService.hasMatchingActiveCancellation(
+      item,
+      _serverCancellations,
+    );
   }
 
   Future<void> _loadLeaveData() async {
@@ -44,17 +56,26 @@ class _LeavePageState extends State<LeavePage> {
       MenuModuleType.leave,
       fallback: 5105,
     );
+    final effectiveBranchId =
+        await LocalStorageService.getEffectiveUserBranchId();
+    final branchName =
+        await LocalStorageService.getEffectiveUserBranchName();
     final rights = await _userRightsService.fetchUserRights(
       menuCode: leaveMenuCode,
+      branchId: effectiveBranchId,
     );
 
     final results = await Future.wait([
       _leaveService.fetchLeaveApplications(),
       _employeeService.fetchEmployeeDashboard(),
+      _leaveService.fetchLeaveCancellationList(),
+      LocalStorageService.getPendingLeaveCancellationKeys(),
     ]);
 
     final allApps = results[0] as List<LeaveApplicationModel>;
     final empDetails = results[1] as EmployeeDetailsModel?;
+    final serverCancellations = results[2] as List<Map<String, dynamic>>;
+    final localPendingKeys = Set<int>.from(results[3] as Set<int>);
 
     final currentUserName = (empDetails != null && empDetails.name.isNotEmpty)
         ? empDetails.name
@@ -81,10 +102,22 @@ class _LeavePageState extends State<LeavePage> {
     // Sort descending by key so the most recent applications appear first
     myLeaves.sort((a, b) => b.key.compareTo(a.key));
 
+    // Clean up local pending keys for leaves already finalised as Cancelled/Rejected
+    for (final item in myLeaves) {
+      if (!_isStatusCancellable(item.status) &&
+          localPendingKeys.contains(item.key)) {
+        localPendingKeys.remove(item.key);
+        LocalStorageService.removePendingLeaveCancellationKey(item.key);
+      }
+    }
+
     if (mounted) {
       setState(() {
         _userRights = rights;
+        _homeBranchName = branchName;
         _leaveApplications = myLeaves;
+        _serverCancellations = serverCancellations;
+        _pendingCancellationKeys = localPendingKeys;
         _isLoading = false;
       });
     }
@@ -465,7 +498,10 @@ class _LeavePageState extends State<LeavePage> {
                 ? summaryItem.noOfLeaves
                 : (details?.noOfLeaves ?? 1.0);
 
-            final isCancellable = _isStatusCancellable(rawStatus);
+            final alreadyCancelRequested = _hasPendingCancellation(summaryItem);
+            final isCancellingThis = _cancellingKeys.contains(summaryItem.key);
+            final isCancellable =
+                _isStatusCancellable(rawStatus) && !alreadyCancelRequested;
             final isApproved = approvalStatus == 'Approved';
             final statusBgColor = _getStatusBg(rawStatus);
             final statusTextColor = _getStatusColor(rawStatus);
@@ -528,6 +564,44 @@ class _LeavePageState extends State<LeavePage> {
                       value: reason.isNotEmpty ? reason : 'No reason specified',
                     ),
                     const SizedBox(height: 16),
+                    if (alreadyCancelRequested &&
+                        _isStatusCancellable(rawStatus)) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: Colors.orange.withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(
+                              Icons.hourglass_top_rounded,
+                              size: 18,
+                              color: Colors.orange,
+                            ),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Cancellation request already submitted (pending approval).',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF9A3412),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     if (isCancellable) ...[
                       Row(
                         children: [
@@ -540,107 +614,136 @@ class _LeavePageState extends State<LeavePage> {
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                               ),
-                              onPressed: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    title: const Row(
-                                      children: [
-                                        Icon(
-                                          Icons.warning_amber_rounded,
-                                          color: AppColors.error,
-                                        ),
-                                        SizedBox(width: 8),
-                                        Text('Cancel Leave Request'),
-                                      ],
-                                    ),
-                                    content: Text(
-                                      isApproved
-                                          ? 'Are you sure you want to cancel this approved leave application?'
-                                          : 'Are you sure you want to cancel this leave application?',
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.pop(ctx, false),
-                                        child: const Text('Keep Leave'),
-                                      ),
-                                      ElevatedButton(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: AppColors.error,
-                                        ),
-                                        onPressed: () =>
-                                            Navigator.pop(ctx, true),
-                                        child: const Text('Yes, Cancel'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-
-                                if (confirm != true || !context.mounted) return;
-
-                                final messenger = ScaffoldMessenger.of(context);
-                                Navigator.pop(context);
-
-                                messenger.showSnackBar(
-                                  const SnackBar(
-                                    content: Row(
-                                      children: [
-                                        SizedBox(
-                                          width: 16,
-                                          height: 16,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Colors.white,
+                              onPressed: isCancellingThis
+                                  ? null
+                                  : () async {
+                                      if (_cancellingKeys.contains(
+                                        summaryItem.key,
+                                      )) {
+                                        return;
+                                      }
+                                      final confirm = await showDialog<bool>(
+                                        context: context,
+                                        builder: (ctx) => AlertDialog(
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              16,
+                                            ),
                                           ),
+                                          title: const Row(
+                                            children: [
+                                              Icon(
+                                                Icons.warning_amber_rounded,
+                                                color: AppColors.error,
+                                              ),
+                                              SizedBox(width: 8),
+                                              Text('Cancel Leave Request'),
+                                            ],
+                                          ),
+                                          content: Text(
+                                            isApproved
+                                                ? 'Are you sure you want to cancel this approved leave application?'
+                                                : 'Are you sure you want to cancel this leave application?',
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () =>
+                                                  Navigator.pop(ctx, false),
+                                              child: const Text('Keep Leave'),
+                                            ),
+                                            ElevatedButton(
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor:
+                                                    AppColors.error,
+                                              ),
+                                              onPressed: () =>
+                                                  Navigator.pop(ctx, true),
+                                              child: const Text('Yes, Cancel'),
+                                            ),
+                                          ],
                                         ),
-                                        SizedBox(width: 12),
-                                        Text('Cancelling leave request...'),
-                                      ],
-                                    ),
-                                    duration: Duration(seconds: 2),
-                                  ),
-                                );
+                                      );
 
-                                final isApproverLevel3 =
-                                    _userRights?.transactions == 3;
-                                final success = await _leaveService
-                                    .saveLeaveCancellation(
-                                      lvApplicationId: summaryItem.key
-                                          .toString(),
-                                      remarks: 'Cancel leave request',
-                                      approvalStatus: isApproverLevel3
-                                          ? 'A'
-                                          : 'N',
-                                    );
+                                      if (confirm != true || !context.mounted) {
+                                        return;
+                                      }
 
-                                if (mounted) {
-                                  messenger.hideCurrentSnackBar();
-                                  if (success) {
-                                    messenger.showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                          'Leave request cancelled successfully!',
+                                      setState(() {
+                                        _cancellingKeys.add(summaryItem.key);
+                                      });
+
+                                      final messenger =
+                                          ScaffoldMessenger.of(context);
+                                      Navigator.pop(context);
+
+                                      messenger.showSnackBar(
+                                        const SnackBar(
+                                          content: Row(
+                                            children: [
+                                              SizedBox(
+                                                width: 16,
+                                                height: 16,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                  strokeWidth: 2,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                              SizedBox(width: 12),
+                                              Text(
+                                                'Submitting leave cancellation...',
+                                              ),
+                                            ],
+                                          ),
+                                          duration: Duration(seconds: 2),
                                         ),
-                                        backgroundColor: Colors.green,
-                                      ),
-                                    );
-                                    _loadLeaveData();
-                                  } else {
-                                    messenger.showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                          'Failed to cancel leave request. Please try again.',
-                                        ),
-                                        backgroundColor: AppColors.error,
-                                      ),
-                                    );
-                                  }
-                                }
-                              },
+                                      );
+
+                                      final success = await _leaveService
+                                          .saveLeaveCancellation(
+                                            lvApplicationId:
+                                                summaryItem.key.toString(),
+                                            remarks: 'Cancel leave request',
+                                          );
+
+                                      if (mounted) {
+                                        setState(() {
+                                          _cancellingKeys.remove(
+                                            summaryItem.key,
+                                          );
+                                          if (success) {
+                                            _pendingCancellationKeys.add(
+                                              summaryItem.key,
+                                            );
+                                          }
+                                        });
+                                        messenger.hideCurrentSnackBar();
+                                        if (success) {
+                                          await LocalStorageService
+                                              .addPendingLeaveCancellationKey(
+                                                summaryItem.key,
+                                              );
+                                          messenger.showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                'Leave cancellation request submitted successfully!',
+                                              ),
+                                              backgroundColor: Colors.green,
+                                            ),
+                                          );
+                                          _loadLeaveData();
+                                        } else {
+                                          messenger.showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                'Failed to cancel leave request. Please try again.',
+                                              ),
+                                              backgroundColor: AppColors.error,
+                                            ),
+                                          );
+                                        }
+                                      }
+                                    },
                               child: const Text('Cancel Leave'),
                             ),
                           ),
@@ -699,9 +802,24 @@ class _LeavePageState extends State<LeavePage> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: const Text(
-          'Leave Management',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Leave Management',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            if (_homeBranchName != null && _homeBranchName!.isNotEmpty)
+              Text(
+                _homeBranchName!,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+          ],
         ),
         actions: [
           IconButton(

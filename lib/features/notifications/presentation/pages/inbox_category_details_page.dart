@@ -53,38 +53,90 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
     ]);
 
     final list = results[0] as List<Map<String, dynamic>>;
-    final rights = results[1] as UserRightsModel?;
+    var rights = results[1] as UserRightsModel?;
 
     final ap = await LocalStorageService.getAccessPoint();
     final user = await LocalStorageService.getUser();
     debugPrint('====================================================');
     debugPrint('📂 [INBOX CATEGORY: "${widget.title}"]');
-    debugPrint('🏢 AccessPoint: $ap | User: ${user?.userName} (UserID: ${user?.userId})');
-    debugPrint('🔢 MenuCode: ${widget.menuCode}, MenuLinkCode: ${widget.menuLinkCode}');
+    debugPrint(
+      '🏢 AccessPoint: $ap | User: ${user?.userName} (UserID: ${user?.userId})',
+    );
+    debugPrint(
+      '🔢 MenuCode: ${widget.menuCode}, MenuLinkCode: ${widget.menuLinkCode}',
+    );
     debugPrint('📋 Items Count from Server: ${list.length}');
     for (int i = 0; i < list.length; i++) {
       debugPrint('   👉 [$i] ${list[i]}');
     }
     debugPrint('====================================================');
 
-    final isLeave = widget.menuCode == '19' ||
-        widget.menuCode == '5105' ||
-        widget.title.toLowerCase().contains('leave') ||
-        list.any((i) => i.containsKey('LeaveType'));
+    final titleLower = widget.title.toLowerCase();
+    final isCancellationCategory =
+        widget.menuCode == '5106' ||
+        widget.menuCode == '5102' ||
+        titleLower.contains('cancel') ||
+        titleLower.contains('cancellation');
 
-    final isClaim = widget.menuCode == '15' ||
+    final isLeave =
+        !isCancellationCategory &&
+        (widget.menuCode == '19' ||
+            widget.menuCode == '5105' ||
+            titleLower.contains('leave') ||
+            list.any((i) => i.containsKey('LeaveType')));
+
+    final isClaim =
+        widget.menuCode == '15' ||
         widget.menuCode == '5121' ||
-        widget.title.toLowerCase().contains('claim') ||
-        list.any((i) => i.containsKey('ClaimNumber') || i.containsKey('ClaimDate'));
+        titleLower.contains('claim') ||
+        list.any(
+          (i) => i.containsKey('ClaimNumber') || i.containsKey('ClaimDate'),
+        );
 
-    if (isLeave && list.isNotEmpty) {
+    if (isCancellationCategory && list.isNotEmpty) {
       await Future.wait(
         list.map((item) async {
-          final id = int.tryParse(item['Key']?.toString() ?? item['ID']?.toString() ?? '0') ?? 0;
+          final id =
+              int.tryParse(
+                item['Key']?.toString() ?? item['ID']?.toString() ?? '0',
+              ) ??
+              0;
           if (id > 0) {
             try {
-              final leaveDetails = await _leaveService.fetchLeaveApplicationDetails(id);
+              final cancelDetails = await _leaveService
+                  .fetchLeaveCancellationDetails(id);
+              if (cancelDetails != null) {
+                if (cancelDetails['BranchID'] != null) {
+                  item['BranchID'] = cancelDetails['BranchID'];
+                }
+                if (cancelDetails['LvApplicationID'] != null) {
+                  item['LvApplicationID'] = cancelDetails['LvApplicationID'];
+                }
+                final remarks = cancelDetails['Remarks']?.toString().trim();
+                if (remarks != null && remarks.isNotEmpty) {
+                  item['Reason'] = remarks;
+                }
+              }
+            } catch (_) {}
+          }
+        }),
+      );
+    } else if (isLeave && list.isNotEmpty) {
+      await Future.wait(
+        list.map((item) async {
+          final id =
+              int.tryParse(
+                item['Key']?.toString() ?? item['ID']?.toString() ?? '0',
+              ) ??
+              0;
+          if (id > 0) {
+            try {
+              final leaveDetails = await _leaveService
+                  .fetchLeaveApplicationDetails(id);
               if (leaveDetails != null) {
+                if (leaveDetails.branchId > 0) {
+                  item['BranchID'] = leaveDetails.branchId;
+                }
                 if (leaveDetails.reason.trim().isNotEmpty) {
                   item['Reason'] = leaveDetails.reason.trim();
                 }
@@ -96,13 +148,22 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
     } else if (isClaim && list.isNotEmpty) {
       await Future.wait(
         list.map((item) async {
-          final id = int.tryParse(item['Key']?.toString() ?? item['ID']?.toString() ?? '0') ?? 0;
+          final id =
+              int.tryParse(
+                item['Key']?.toString() ?? item['ID']?.toString() ?? '0',
+              ) ??
+              0;
           if (id > 0) {
             try {
               final claimDetails = await _claimService.fetchClaimRawDetails(id);
               if (claimDetails != null) {
                 final table = claimDetails['Table'] as List?;
                 final table1 = claimDetails['Table1'] as List?;
+                if (table != null &&
+                    table.isNotEmpty &&
+                    table[0]['BranchID'] != null) {
+                  item['BranchID'] = table[0]['BranchID'];
+                }
                 final remarks = (table != null && table.isNotEmpty)
                     ? table[0]['Remarks']?.toString()
                     : null;
@@ -122,12 +183,42 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
       );
     }
 
+    // Multi-branch approver fix:
+    // If the currently selected drawer branch returned Transactions <= 1 (no hierarchy),
+    // resolve UserRights using the inbox item's own BranchID (or Branch 1 Head Office)
+    // so approvers still get Approve/Forward buttons regardless of selected branch.
+    if ((rights?.transactions ?? 0) <= 1 && list.isNotEmpty) {
+      final candidateBranchIds = <int>{};
+      for (final item in list) {
+        final bId = int.tryParse(
+          item['BranchID']?.toString() ?? item['BranchId']?.toString() ?? '',
+        );
+        if (bId != null && bId > 0) {
+          candidateBranchIds.add(bId);
+        }
+      }
+      candidateBranchIds.add(1);
+      for (final bId in candidateBranchIds) {
+        try {
+          final branchRights = await _userRightsService.fetchUserRights(
+            menuCode: menuInt,
+            branchId: bId,
+          );
+          if (branchRights.transactions > (rights?.transactions ?? 0)) {
+            rights = branchRights;
+            if (branchRights.transactions >= 3) break;
+          }
+        } catch (_) {}
+      }
+    }
+
     if (mounted) {
       setState(() {
         _userRights = rights;
         if (list.isNotEmpty) {
           _items = list.map((item) {
-            final emp = item['EmployeeName']?.toString() ??
+            final emp =
+                item['EmployeeName']?.toString() ??
                 item['Employee']?.toString() ??
                 item['EmpName']?.toString() ??
                 item['Contractor']?.toString() ??
@@ -139,11 +230,12 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
                 item['Name']?.toString() ??
                 item['UserName']?.toString() ??
                 'Applicant';
-            final rawDetails = (item['Reason']?.toString() ??
-                    item['Remarks']?.toString() ??
-                    item['Details']?.toString() ??
-                    '')
-                .trim();
+            final rawDetails =
+                (item['Reason']?.toString() ??
+                        item['Remarks']?.toString() ??
+                        item['Details']?.toString() ??
+                        '')
+                    .trim();
             final isAspxRedirect =
                 rawDetails.contains('.aspx') || rawDetails.startsWith('..');
             final cleanDetails = isAspxRedirect ? '' : rawDetails;
@@ -161,7 +253,8 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
               }
             }
 
-            final type = item['ClaimType']?.toString() ??
+            final type =
+                item['ClaimType']?.toString() ??
                 item['LeaveType']?.toString() ??
                 item['ExpenseType']?.toString() ??
                 item['Category']?.toString() ??
@@ -169,42 +262,49 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
                     ? parsedMenuName
                     : null);
 
-            final claimNo = (item['ClaimNumber'] != null &&
+            final claimNo =
+                (item['ClaimNumber'] != null &&
                     item['ClaimNumber'].toString().isNotEmpty &&
                     item['ClaimNumber'].toString() != '0')
                 ? item['ClaimNumber'].toString()
                 : null;
 
-            final docNoRaw = item['BillNo'] ??
+            final docNoRaw =
+                item['BillNo'] ??
                 item['InvoiceNo'] ??
                 item['VoucherNo'] ??
                 item['RefNo'] ??
                 item['DocNo'];
-            final docNo = (docNoRaw != null &&
+            final docNo =
+                (docNoRaw != null &&
                     docNoRaw.toString().isNotEmpty &&
                     docNoRaw.toString() != '0')
                 ? docNoRaw.toString()
                 : null;
 
-            final fromDate = item['ClaimDate']?.toString() ??
+            final fromDate =
+                item['ClaimDate']?.toString() ??
                 item['FromDate']?.toString() ??
                 item['Date']?.toString();
             final toDate = item['ToDate']?.toString();
-            final branch = item['BranchName']?.toString() ??
-                item['Branch']?.toString();
-            final rawAmount = item['Amount'] ??
+            final branch =
+                item['BranchName']?.toString() ?? item['Branch']?.toString();
+            final rawAmount =
+                item['Amount'] ??
                 item['PayableAmount'] ??
                 item['NetAmount'] ??
                 item['TotalAmount'] ??
                 item['BillAmount'];
             final amount =
                 rawAmount != null && rawAmount.toString().trim().isNotEmpty
-                    ? '₹ ${rawAmount.toString().trim()}'
-                    : null;
+                ? '₹ ${rawAmount.toString().trim()}'
+                : null;
 
             return {
-              'id': int.tryParse(
-                      item['Key']?.toString() ?? item['ID']?.toString() ?? '0') ??
+              'id':
+                  int.tryParse(
+                    item['Key']?.toString() ?? item['ID']?.toString() ?? '0',
+                  ) ??
                   0,
               'raw': item,
               'applicant': emp,
@@ -235,8 +335,8 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
     final actionTitle = action == 'A'
         ? 'Approve'
         : action == 'F'
-            ? 'Forward'
-            : 'Reject';
+        ? 'Forward'
+        : 'Reject';
 
     final confirm = await showDialog<bool>(
       context: context,
@@ -248,13 +348,13 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
               action == 'A'
                   ? Icons.check_circle_outline_rounded
                   : action == 'F'
-                      ? Icons.forward_rounded
-                      : Icons.cancel_outlined,
+                  ? Icons.forward_rounded
+                  : Icons.cancel_outlined,
               color: action == 'A'
                   ? Colors.green
                   : action == 'F'
-                      ? AppColors.primary
-                      : AppColors.error,
+                  ? AppColors.primary
+                  : AppColors.error,
             ),
             const SizedBox(width: 8),
             Text('$actionTitle Request'),
@@ -278,8 +378,8 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
               backgroundColor: action == 'A'
                   ? Colors.green
                   : action == 'F'
-                      ? AppColors.primary
-                      : AppColors.error,
+                  ? AppColors.primary
+                  : AppColors.error,
             ),
             onPressed: () => Navigator.pop(ctx, true),
             child: Text(actionTitle),
@@ -298,19 +398,23 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
     bool success = false;
     final titleLower = widget.title.toLowerCase();
     final isCancellation =
+        widget.menuCode == '5106' ||
         widget.menuCode == '5102' ||
         titleLower.contains('cancel') ||
         titleLower.contains('cancellation');
 
     if (isCancellation) {
       final raw = currentItem['raw'] as Map<String, dynamic>?;
-      final lvCancelId = int.tryParse(
-              raw?['LvCancelID']?.toString() ??
-              raw?['Key']?.toString() ??
-              raw?['ID']?.toString() ??
-              id.toString()) ??
+      final lvCancelId =
+          int.tryParse(
+            raw?['LvCancelID']?.toString() ??
+                raw?['Key']?.toString() ??
+                raw?['ID']?.toString() ??
+                id.toString(),
+          ) ??
           id;
-      final lvAppId = raw?['LvApplicationID']?.toString() ??
+      final lvAppId =
+          raw?['LvApplicationID']?.toString() ??
           raw?['LvApplicationId']?.toString() ??
           raw?['LeaveApplicationID']?.toString() ??
           raw?['LeaveID']?.toString() ??
@@ -322,8 +426,8 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
         remarks: action == 'A'
             ? 'Approved via Mobile App'
             : action == 'F'
-                ? 'Forwarded via Mobile App'
-                : 'Rejected via Mobile App',
+            ? 'Forwarded via Mobile App'
+            : 'Rejected via Mobile App',
         approvalStatus: action,
         itemData: currentItem,
       );
@@ -364,20 +468,20 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
       final actionWord = action == 'A'
           ? 'approved'
           : action == 'F'
-              ? 'forwarded'
-              : 'rejected';
+          ? 'forwarded'
+          : 'rejected';
 
       final categoryLabel = isCancellation
           ? 'Leave cancellation'
           : (widget.menuCode == '19' ||
-                  widget.menuCode == '5105' ||
-                  titleLower.contains('leave'))
-              ? 'Leave application'
-              : (widget.menuCode == '15' ||
-                      widget.menuCode == '5121' ||
-                      titleLower.contains('claim'))
-                  ? 'Claim application'
-                  : 'Request';
+                widget.menuCode == '5105' ||
+                titleLower.contains('leave'))
+          ? 'Leave application'
+          : (widget.menuCode == '15' ||
+                widget.menuCode == '5121' ||
+                titleLower.contains('claim'))
+          ? 'Claim application'
+          : 'Request';
 
       messenger.showSnackBar(
         SnackBar(
@@ -389,8 +493,8 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
           backgroundColor: action == 'A'
               ? Colors.green
               : action == 'F'
-                  ? AppColors.primary
-                  : AppColors.error,
+              ? AppColors.primary
+              : AppColors.error,
           duration: const Duration(seconds: 2),
         ),
       );
@@ -421,9 +525,7 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.title),
-      ),
+      appBar: AppBar(title: Text(widget.title)),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
@@ -433,11 +535,18 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: const [
-                          Icon(Icons.inbox_rounded, size: 48, color: AppColors.textMuted),
+                          Icon(
+                            Icons.inbox_rounded,
+                            size: 48,
+                            color: AppColors.textMuted,
+                          ),
                           SizedBox(height: 12),
                           Text(
                             'No pending requests found',
-                            style: TextStyle(color: AppColors.textMuted, fontSize: 14),
+                            style: TextStyle(
+                              color: AppColors.textMuted,
+                              fontSize: 14,
+                            ),
                           ),
                         ],
                       ),
@@ -463,7 +572,8 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
                         final isRejected = statusStr == 'rejected';
                         final isPending =
                             !isApproved && !isForwarded && !isRejected;
-                        final isClaimCategory = widget.menuCode == '15' ||
+                        final isClaimCategory =
+                            widget.menuCode == '15' ||
                             widget.menuCode == '5121' ||
                             widget.title.toLowerCase().contains('claim') ||
                             item['claimNo'] != null;
@@ -487,315 +597,487 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
                             borderRadius: BorderRadius.circular(14),
                             child: InkWell(
                               borderRadius: BorderRadius.circular(14),
-                              onTap: isClaimCategory ? () => _openClaimDetails(item) : null,
+                              onTap: isClaimCategory
+                                  ? () => _openClaimDetails(item)
+                                  : null,
                               child: Padding(
                                 padding: const EdgeInsets.all(16),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Row(
-                                    children: [
-                                      CircleAvatar(
-                                        radius: 18,
-                                        backgroundColor:
-                                            AppColors.primary.withValues(alpha: 0.1),
-                                        child: Text(
-                                          item['avatar'],
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: AppColors.primary,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Text(
-                                        item['applicant'],
-                                        style: const TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.bold,
-                                          color: AppColors.textPrimary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 10, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: isPending
-                                          ? Colors.orange.withValues(alpha: 0.1)
-                                          : isApproved
-                                              ? Colors.green.withValues(alpha: 0.1)
-                                              : isForwarded
-                                                  ? AppColors.primary.withValues(alpha: 0.1)
-                                                  : Colors.red.withValues(alpha: 0.1),
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: Text(
-                                      isPending
-                                          ? 'Pending'
-                                          : isApproved
-                                              ? 'Approved'
-                                              : isForwarded
-                                                  ? 'Forwarded'
-                                                  : 'Rejected',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                        color: isPending
-                                            ? Colors.orange
-                                            : isApproved
-                                                ? Colors.green
-                                                : isForwarded
-                                                    ? AppColors.primary
-                                                    : Colors.red,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const Divider(height: 20, color: AppColors.cardBorder),
-                              if (item['claimNo'] != null)
-                                _DetailInfoRow(label: 'Claim Number', value: item['claimNo'] as String),
-                              if (item['docNo'] != null)
-                                _DetailInfoRow(label: 'Ref / Bill No', value: item['docNo'] as String),
-                              if (item['type'] != null && (item['type'] as String).isNotEmpty)
-                                _DetailInfoRow(
-                                  label: (widget.menuCode == '15' ||
-                                          widget.menuCode == '5121' ||
-                                          widget.title.toLowerCase().contains('claim'))
-                                      ? 'Category'
-                                      : 'Type',
-                                  value: item['type'] as String,
-                                ),
-                              if (item['amount'] != null)
-                                _DetailInfoRow(label: 'Amount', value: item['amount'] as String),
-                              if (item['fromDate'] != null && (item['fromDate'] as String).isNotEmpty)
-                                _DetailInfoRow(
-                                  label: 'Date',
-                                  value: (item['toDate'] != null && item['toDate'] != item['fromDate'])
-                                      ? '${item['fromDate']} - ${item['toDate']}'
-                                      : item['fromDate'] as String,
-                                ),
-                              if (item['branch'] != null && (item['branch'] as String).isNotEmpty)
-                                _DetailInfoRow(label: 'Branch', value: item['branch'] as String),
-                              Builder(
-                                builder: (context) {
-                                  final isLeaveCategory = widget.menuCode == '19' ||
-                                      widget.menuCode == '5105' ||
-                                      widget.title.toLowerCase().contains('leave') ||
-                                      (item['type'] != null &&
-                                          item['type'].toString().toLowerCase().contains('day'));
-                                  final reasonVal = (item['reason'] as String?)?.trim() ?? '';
-                                  final isAspxDoc = item['isAspxDetails'] == true;
-                                  if (reasonVal.isEmpty && isAspxDoc) {
-                                    return const SizedBox.shrink();
-                                  }
-
-                                  return Container(
-                                    width: double.infinity,
-                                    margin: const EdgeInsets.only(top: 10),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 10,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFF8FAFC),
-                                      borderRadius: BorderRadius.circular(10),
-                                      border: Border.all(color: const Color(0xFFE2E8F0)),
-                                    ),
-                                    child: Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
                                       children: [
-                                        const Padding(
-                                          padding: EdgeInsets.only(top: 2),
-                                          child: Icon(
-                                            Icons.notes_rounded,
-                                            size: 16,
-                                            color: AppColors.primary,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                isLeaveCategory ? 'Reason for Leave' : 'Remarks / Reason',
+                                        Row(
+                                          children: [
+                                            CircleAvatar(
+                                              radius: 18,
+                                              backgroundColor: AppColors.primary
+                                                  .withValues(alpha: 0.1),
+                                              child: Text(
+                                                item['avatar'],
                                                 style: const TextStyle(
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.w600,
-                                                  color: AppColors.textMuted,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: AppColors.primary,
                                                 ),
                                               ),
-                                              const SizedBox(height: 2),
-                                              Text(
-                                                reasonVal.isNotEmpty
-                                                    ? reasonVal
-                                                    : 'No reason specified',
-                                                style: TextStyle(
-                                                  fontSize: 13,
-                                                  fontWeight: FontWeight.w500,
-                                                  fontStyle: reasonVal.isEmpty
-                                                      ? FontStyle.italic
-                                                      : FontStyle.normal,
-                                                  color: reasonVal.isEmpty
-                                                      ? AppColors.textMuted
-                                                      : AppColors.textPrimary,
-                                                  height: 1.3,
-                                                ),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Text(
+                                              item['applicant'],
+                                              style: const TextStyle(
+                                                fontSize: 15,
+                                                fontWeight: FontWeight.bold,
+                                                color: AppColors.textPrimary,
                                               ),
-                                            ],
+                                            ),
+                                          ],
+                                        ),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 4,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: isPending
+                                                ? Colors.orange.withValues(
+                                                    alpha: 0.1,
+                                                  )
+                                                : isApproved
+                                                ? Colors.green.withValues(
+                                                    alpha: 0.1,
+                                                  )
+                                                : isForwarded
+                                                ? AppColors.primary.withValues(
+                                                    alpha: 0.1,
+                                                  )
+                                                : Colors.red.withValues(
+                                                    alpha: 0.1,
+                                                  ),
+                                            borderRadius: BorderRadius.circular(
+                                              20,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            isPending
+                                                ? 'Pending'
+                                                : isApproved
+                                                ? 'Approved'
+                                                : isForwarded
+                                                ? 'Forwarded'
+                                                : 'Rejected',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: isPending
+                                                  ? Colors.orange
+                                                  : isApproved
+                                                  ? Colors.green
+                                                  : isForwarded
+                                                  ? AppColors.primary
+                                                  : Colors.red,
+                                            ),
                                           ),
                                         ),
                                       ],
                                     ),
-                                  );
-                                },
-                              ),
+                                    const Divider(
+                                      height: 20,
+                                      color: AppColors.cardBorder,
+                                    ),
+                                    if (item['claimNo'] != null)
+                                      _DetailInfoRow(
+                                        label: 'Claim Number',
+                                        value: item['claimNo'] as String,
+                                      ),
+                                    if (item['docNo'] != null)
+                                      _DetailInfoRow(
+                                        label: 'Ref / Bill No',
+                                        value: item['docNo'] as String,
+                                      ),
+                                    if (item['type'] != null &&
+                                        (item['type'] as String).isNotEmpty)
+                                      _DetailInfoRow(
+                                        label:
+                                            (widget.menuCode == '15' ||
+                                                widget.menuCode == '5121' ||
+                                                widget.title
+                                                    .toLowerCase()
+                                                    .contains('claim'))
+                                            ? 'Category'
+                                            : 'Type',
+                                        value: item['type'] as String,
+                                      ),
+                                    if (item['amount'] != null)
+                                      _DetailInfoRow(
+                                        label: 'Amount',
+                                        value: item['amount'] as String,
+                                      ),
+                                    if (item['fromDate'] != null &&
+                                        (item['fromDate'] as String).isNotEmpty)
+                                      _DetailInfoRow(
+                                        label: 'Date',
+                                        value:
+                                            (item['toDate'] != null &&
+                                                item['toDate'] !=
+                                                    item['fromDate'])
+                                            ? '${item['fromDate']} - ${item['toDate']}'
+                                            : item['fromDate'] as String,
+                                      ),
+                                    if (item['branch'] != null &&
+                                        (item['branch'] as String).isNotEmpty)
+                                      _DetailInfoRow(
+                                        label: 'Branch',
+                                        value: item['branch'] as String,
+                                      ),
+                                    Builder(
+                                      builder: (context) {
+                                        final isLeaveCategory =
+                                            widget.menuCode == '19' ||
+                                            widget.menuCode == '5105' ||
+                                            widget.title.toLowerCase().contains(
+                                              'leave',
+                                            ) ||
+                                            (item['type'] != null &&
+                                                item['type']
+                                                    .toString()
+                                                    .toLowerCase()
+                                                    .contains('day'));
+                                        final reasonVal =
+                                            (item['reason'] as String?)
+                                                ?.trim() ??
+                                            '';
+                                        final isAspxDoc =
+                                            item['isAspxDetails'] == true;
+                                        if (reasonVal.isEmpty && isAspxDoc) {
+                                          return const SizedBox.shrink();
+                                        }
 
-                              if (isPending) ...[
-                                const SizedBox(height: 16),
-                                isProcessing
-                                    ? const Center(
-                                        child: SizedBox(
-                                          width: 24,
-                                          height: 24,
-                                          child: CircularProgressIndicator(strokeWidth: 2.5),
-                                        ),
-                                      )
-                                    : Builder(
-                                        builder: (context) {
-                                          final transactions = _userRights?.transactions ?? 3;
-
-                                          // 1 = No Hierarchy: Show convenient info message
-                                          if (transactions == 1) {
-                                            return Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                              decoration: BoxDecoration(
-                                                color: Colors.blue.withValues(alpha: 0.06),
-                                                borderRadius: BorderRadius.circular(8),
-                                                border: Border.all(color: Colors.blue.withValues(alpha: 0.2)),
-                                              ),
-                                              child: Row(
-                                                children: const [
-                                                  Icon(Icons.info_outline_rounded, size: 16, color: Colors.blue),
-                                                  SizedBox(width: 8),
-                                                  Expanded(
-                                                    child: Text(
-                                                      'No approval hierarchy assigned to your account for this module (Transactions = 1).',
-                                                      style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            );
-                                          }
-
-                                          // 2 = Authority to Forward
-                                          if (transactions == 2) {
-                                            return Row(
-                                              children: [
-                                                Expanded(
-                                                  child: OutlinedButton(
-                                                    style: OutlinedButton.styleFrom(
-                                                      foregroundColor: AppColors.error,
-                                                      side: const BorderSide(color: AppColors.error),
-                                                      padding: const EdgeInsets.symmetric(vertical: 8),
-                                                      minimumSize: const Size(0, 36),
-                                                    ),
-                                                    onPressed: () => _handleApproval(itemId, 'R'),
-                                                    child: const Text('Reject', style: TextStyle(fontSize: 12)),
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Expanded(
-                                                  child: ElevatedButton.icon(
-                                                    icon: const Icon(Icons.forward_rounded, size: 14),
-                                                    label: const Text('Forward', style: TextStyle(fontSize: 12)),
-                                                    style: ElevatedButton.styleFrom(
-                                                      backgroundColor: AppColors.primary,
-                                                      padding: const EdgeInsets.symmetric(vertical: 8),
-                                                      minimumSize: const Size(0, 36),
-                                                    ),
-                                                    onPressed: () => _handleApproval(itemId, 'F'),
-                                                  ),
-                                                ),
-                                              ],
-                                            );
-                                          }
-
-                                          // 3 = Authority to Approve
-                                          return Row(
+                                        return Container(
+                                          width: double.infinity,
+                                          margin: const EdgeInsets.only(
+                                            top: 10,
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 12,
+                                            vertical: 10,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFF8FAFC),
+                                            borderRadius: BorderRadius.circular(
+                                              10,
+                                            ),
+                                            border: Border.all(
+                                              color: const Color(0xFFE2E8F0),
+                                            ),
+                                          ),
+                                          child: Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
                                             children: [
-                                              Expanded(
-                                                child: OutlinedButton(
-                                                  style: OutlinedButton.styleFrom(
-                                                    foregroundColor: AppColors.error,
-                                                    side: const BorderSide(color: AppColors.error),
-                                                    padding: const EdgeInsets.symmetric(vertical: 8),
-                                                    minimumSize: const Size(0, 36),
-                                                  ),
-                                                  onPressed: () => _handleApproval(itemId, 'R'),
-                                                  child: const Text('Reject', style: TextStyle(fontSize: 12)),
+                                              const Padding(
+                                                padding: EdgeInsets.only(
+                                                  top: 2,
+                                                ),
+                                                child: Icon(
+                                                  Icons.notes_rounded,
+                                                  size: 16,
+                                                  color: AppColors.primary,
                                                 ),
                                               ),
                                               const SizedBox(width: 8),
                                               Expanded(
-                                                child: ElevatedButton.icon(
-                                                  icon: const Icon(
-                                                      Icons.check_circle_outline_rounded,
-                                                      size: 14),
-                                                  label: const Text('Approve',
-                                                      style: TextStyle(fontSize: 12)),
-                                                  style: ElevatedButton.styleFrom(
-                                                    backgroundColor: Colors.green,
-                                                    padding:
-                                                        const EdgeInsets.symmetric(vertical: 8),
-                                                    minimumSize: const Size(0, 36),
-                                                  ),
-                                                  onPressed: () =>
-                                                      _handleApproval(itemId, 'A'),
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      isLeaveCategory
+                                                          ? 'Reason for Leave'
+                                                          : 'Remarks / Reason',
+                                                      style: const TextStyle(
+                                                        fontSize: 11,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color:
+                                                            AppColors.textMuted,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 2),
+                                                    Text(
+                                                      reasonVal.isNotEmpty
+                                                          ? reasonVal
+                                                          : 'No reason specified',
+                                                      style: TextStyle(
+                                                        fontSize: 13,
+                                                        fontWeight:
+                                                            FontWeight.w500,
+                                                        fontStyle:
+                                                            reasonVal.isEmpty
+                                                            ? FontStyle.italic
+                                                            : FontStyle.normal,
+                                                        color: reasonVal.isEmpty
+                                                            ? AppColors
+                                                                  .textMuted
+                                                            : AppColors
+                                                                  .textPrimary,
+                                                        height: 1.3,
+                                                      ),
+                                                    ),
+                                                  ],
                                                 ),
                                               ),
                                             ],
-                                          );
-                                        },
-                                      ),
-                              ],
-                              if (isClaimCategory)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 12),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: const [
-                                      Text(
-                                        'View Full Breakdown',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                          color: AppColors.primary,
+                                          ),
+                                        );
+                                      },
+                                    ),
+
+                                    if (isPending) ...[
+                                      const SizedBox(height: 16),
+                                      isProcessing
+                                          ? const Center(
+                                              child: SizedBox(
+                                                width: 24,
+                                                height: 24,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      strokeWidth: 2.5,
+                                                    ),
+                                              ),
+                                            )
+                                          : Builder(
+                                              builder: (context) {
+                                                final transactions =
+                                                    _userRights?.transactions ??
+                                                    3;
+
+                                                // 1 = No Hierarchy: Show convenient info message
+                                                if (transactions == 1) {
+                                                  return Container(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          horizontal: 12,
+                                                          vertical: 8,
+                                                        ),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.blue
+                                                          .withValues(
+                                                            alpha: 0.06,
+                                                          ),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            8,
+                                                          ),
+                                                      border: Border.all(
+                                                        color: Colors.blue
+                                                            .withValues(
+                                                              alpha: 0.2,
+                                                            ),
+                                                      ),
+                                                    ),
+                                                    child: Row(
+                                                      children: const [
+                                                        Icon(
+                                                          Icons
+                                                              .info_outline_rounded,
+                                                          size: 16,
+                                                          color: Colors.blue,
+                                                        ),
+                                                        SizedBox(width: 8),
+                                                        Expanded(
+                                                          child: Text(
+                                                            'No approval hierarchy assigned to your account for this module (Transactions = 1).',
+                                                            style: TextStyle(
+                                                              fontSize: 12,
+                                                              color: AppColors
+                                                                  .textSecondary,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  );
+                                                }
+
+                                                // 2 = Authority to Forward
+                                                if (transactions == 2) {
+                                                  return Row(
+                                                    children: [
+                                                      Expanded(
+                                                        child: OutlinedButton(
+                                                          style: OutlinedButton.styleFrom(
+                                                            foregroundColor:
+                                                                AppColors.error,
+                                                            side:
+                                                                const BorderSide(
+                                                                  color:
+                                                                      AppColors
+                                                                          .error,
+                                                                ),
+                                                            padding:
+                                                                const EdgeInsets.symmetric(
+                                                                  vertical: 8,
+                                                                ),
+                                                            minimumSize:
+                                                                const Size(
+                                                                  0,
+                                                                  36,
+                                                                ),
+                                                          ),
+                                                          onPressed: () =>
+                                                              _handleApproval(
+                                                                itemId,
+                                                                'R',
+                                                              ),
+                                                          child: const Text(
+                                                            'Reject',
+                                                            style: TextStyle(
+                                                              fontSize: 12,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      Expanded(
+                                                        child: ElevatedButton.icon(
+                                                          icon: const Icon(
+                                                            Icons
+                                                                .forward_rounded,
+                                                            size: 14,
+                                                          ),
+                                                          label: const Text(
+                                                            'Forward',
+                                                            style: TextStyle(
+                                                              fontSize: 12,
+                                                            ),
+                                                          ),
+                                                          style: ElevatedButton.styleFrom(
+                                                            backgroundColor:
+                                                                AppColors
+                                                                    .primary,
+                                                            padding:
+                                                                const EdgeInsets.symmetric(
+                                                                  vertical: 8,
+                                                                ),
+                                                            minimumSize:
+                                                                const Size(
+                                                                  0,
+                                                                  36,
+                                                                ),
+                                                          ),
+                                                          onPressed: () =>
+                                                              _handleApproval(
+                                                                itemId,
+                                                                'F',
+                                                              ),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  );
+                                                }
+
+                                                // 3 = Authority to Approve
+                                                return Row(
+                                                  children: [
+                                                    Expanded(
+                                                      child: OutlinedButton(
+                                                        style: OutlinedButton.styleFrom(
+                                                          foregroundColor:
+                                                              AppColors.error,
+                                                          side:
+                                                              const BorderSide(
+                                                                color: AppColors
+                                                                    .error,
+                                                              ),
+                                                          padding:
+                                                              const EdgeInsets.symmetric(
+                                                                vertical: 8,
+                                                              ),
+                                                          minimumSize:
+                                                              const Size(0, 36),
+                                                        ),
+                                                        onPressed: () =>
+                                                            _handleApproval(
+                                                              itemId,
+                                                              'R',
+                                                            ),
+                                                        child: const Text(
+                                                          'Reject',
+                                                          style: TextStyle(
+                                                            fontSize: 12,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Expanded(
+                                                      child: ElevatedButton.icon(
+                                                        icon: const Icon(
+                                                          Icons
+                                                              .check_circle_outline_rounded,
+                                                          size: 14,
+                                                        ),
+                                                        label: const Text(
+                                                          'Approve',
+                                                          style: TextStyle(
+                                                            fontSize: 12,
+                                                          ),
+                                                        ),
+                                                        style: ElevatedButton.styleFrom(
+                                                          backgroundColor:
+                                                              Colors.green,
+                                                          padding:
+                                                              const EdgeInsets.symmetric(
+                                                                vertical: 8,
+                                                              ),
+                                                          minimumSize:
+                                                              const Size(0, 36),
+                                                        ),
+                                                        onPressed: () =>
+                                                            _handleApproval(
+                                                              itemId,
+                                                              'A',
+                                                            ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                );
+                                              },
+                                            ),
+                                    ],
+                                    if (isClaimCategory)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 12),
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.end,
+                                          children: const [
+                                            Text(
+                                              'View Full Breakdown',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                color: AppColors.primary,
+                                              ),
+                                            ),
+                                            SizedBox(width: 4),
+                                            Icon(
+                                              Icons.arrow_forward_ios_rounded,
+                                              size: 11,
+                                              color: AppColors.primary,
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                      SizedBox(width: 4),
-                                      Icon(
-                                        Icons.arrow_forward_ios_rounded,
-                                        size: 11,
-                                        color: AppColors.primary,
-                                      ),
-                                    ],
-                                  ),
+                                  ],
                                 ),
-                            ],
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    ),
-                  );
-                },
+                        );
+                      },
                     ),
             ),
     );
@@ -806,10 +1088,7 @@ class _DetailInfoRow extends StatelessWidget {
   final String label;
   final String value;
 
-  const _DetailInfoRow({
-    required this.label,
-    required this.value,
-  });
+  const _DetailInfoRow({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {

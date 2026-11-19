@@ -11,6 +11,8 @@ class UserModel {
   final String? errorMessage;
   final String branchStartTime;
   final String branchEndTime;
+  final int branchId;
+  final String branchName;
 
   bool get canPunchAnywhere => onlinePunchAnywhere == 1;
   bool get isPunchNeeded => punchNeeded == 1;
@@ -28,6 +30,8 @@ class UserModel {
     this.errorMessage,
     this.branchStartTime = '08:00:00',
     this.branchEndTime = '18:00:00',
+    this.branchId = 0,
+    this.branchName = '',
   });
 
   static int _parseFlag(dynamic raw) {
@@ -97,6 +101,30 @@ class UserModel {
           json['branchEndTime']?.toString() ??
           json['EndTime']?.toString() ??
           '18:00:00',
+      branchId:
+          int.tryParse(
+            json['BranchID']?.toString() ??
+                json['BranchId']?.toString() ??
+                json['branchId']?.toString() ??
+                json['branchID']?.toString() ??
+                json['DefaultBranchID']?.toString() ??
+                json['DefaultBranchId']?.toString() ??
+                json['UserBranchID']?.toString() ??
+                json['UserBranchId']?.toString() ??
+                json['ID_Branch']?.toString() ??
+                json['Branch_ID']?.toString() ??
+                '0',
+          ) ??
+          0,
+      branchName:
+          json['BranchName']?.toString() ??
+          json['Branch_Name']?.toString() ??
+          json['branchName']?.toString() ??
+          json['branch_name']?.toString() ??
+          json['DefaultBranchName']?.toString() ??
+          json['DefaultBranch']?.toString() ??
+          json['Branch']?.toString() ??
+          '',
     );
   }
 
@@ -114,6 +142,8 @@ class UserModel {
       'ErrorMessage': errorMessage,
       'BranchStartTime': branchStartTime,
       'BranchEndTime': branchEndTime,
+      'BranchID': branchId,
+      'BranchName': branchName,
     };
   }
 }

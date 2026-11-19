@@ -20,7 +20,7 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
   final _userRightsService = UserRightsService();
   final _remarksController = TextEditingController();
   final _rateController = TextEditingController();
-  final _qtyController = TextEditingController(text: '1');
+  final _qtyController = TextEditingController();
   final _reasonController = TextEditingController();
 
   DateTime _claimDate = DateTime.now();
@@ -74,10 +74,8 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
     if (mounted) {
       setState(() {
         _categories = list;
-        if (_categories.isNotEmpty) {
-          _selectedCategory = _categories.first;
-          _fetchRateForCategory(_selectedCategory!.value.toString());
-        }
+        // Keep category unselected by default so the form has no pre-filled claim values
+        _selectedCategory = null;
         _isLoadingCategories = false;
       });
     }
@@ -145,44 +143,59 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
         ),
       );
 
-      // Reset item inputs
+      // Reset item inputs completely so no default values remain
+      _selectedCategory = null;
+      _isRateStatic = false;
+      _currentRateFlag = '0';
       _reasonController.clear();
-      _qtyController.text = '1';
-      if (!_isRateStatic) {
-        _rateController.clear();
-      }
+      _qtyController.clear();
+      _rateController.clear();
     });
   }
 
   Future<void> _submitClaim() async {
-    if (_tailItems.isEmpty) {
-      if (_selectedCategory != null && _currentItemAmount > 0) {
-        final dateStr = DateFormat('dd/MM/yyyy').format(_itemDate);
-        final rate = double.tryParse(_rateController.text) ?? 0.0;
-        final qty = _qtyController.text.trim();
-        final reason = _reasonController.text.trim();
+    if (_isSubmitting) return;
 
-        _tailItems.add(
-          ClaimTailItem(
-            claimId: _selectedCategory!.value.toString(),
-            claimName: _selectedCategory!.name,
-            amount: _currentItemAmount,
-            rate: rate,
-            rateFlag: _currentRateFlag,
-            qty: qty.isNotEmpty ? qty : '1',
-            reason: reason.isNotEmpty ? reason : _selectedCategory!.name,
-            date: dateStr,
-          ),
-        );
-      } else {
+    if (_userRights?.isHierarchyMissing == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Need to set Hierarchy for this user'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+      return;
+    }
+
+    if (_tailItems.isEmpty) {
+      final rate = double.tryParse(_rateController.text.trim()) ?? 0.0;
+      final qty = double.tryParse(_qtyController.text.trim()) ?? 0.0;
+      final reason = _reasonController.text.trim();
+
+      if (_selectedCategory == null || rate <= 0 || qty <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Please select an expense category and amount before submitting.'),
+            content: Text(
+              'Please select an expense category and enter valid rate and quantity before submitting.',
+            ),
             backgroundColor: AppColors.error,
           ),
         );
         return;
       }
+
+      final dateStr = DateFormat('dd/MM/yyyy').format(_itemDate);
+      _tailItems.add(
+        ClaimTailItem(
+          claimId: _selectedCategory!.value.toString(),
+          claimName: _selectedCategory!.name,
+          amount: rate * qty,
+          rate: rate,
+          rateFlag: _currentRateFlag,
+          qty: _qtyController.text.trim(),
+          reason: reason.isNotEmpty ? reason : _selectedCategory!.name,
+          date: dateStr,
+        ),
+      );
     }
 
     setState(() {
@@ -192,7 +205,7 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
     final claimDateStr = DateFormat('dd/MM/yyyy').format(_claimDate);
     final remarks = _remarksController.text.trim().isNotEmpty
         ? _remarksController.text.trim()
-        : 'Expense claim application';
+        : (_tailItems.isNotEmpty ? _tailItems.first.reason : '');
 
     final isApproverLevel3 = _userRights?.transactions == 3;
 
@@ -431,7 +444,12 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
                               Expanded(
                                 flex: 3,
                                 child: DropdownButtonFormField<ClaimMasterItem>(
+                                  key: ValueKey(_selectedCategory?.value),
                                   initialValue: _selectedCategory,
+                                  hint: const Text(
+                                    'Select Category',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
                                   decoration: const InputDecoration(
                                     labelText: 'Category',
                                     contentPadding: EdgeInsets.symmetric(
@@ -640,7 +658,13 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: _isSubmitting ? null : _submitClaim,
+                        onPressed: (_isSubmitting ||
+                                (_userRights?.isHierarchyMissing == true) ||
+                                (_tailItems.isEmpty &&
+                                    (_selectedCategory == null ||
+                                        _currentItemAmount <= 0)))
+                            ? null
+                            : _submitClaim,
                         child: _isSubmitting
                             ? const SizedBox(
                                 width: 20,

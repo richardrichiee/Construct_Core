@@ -225,25 +225,40 @@ class _ClaimApprovalDetailsPageState extends State<ClaimApprovalDetailsPage> {
       _isProcessing = true;
     });
 
-    final success = await _claimService.deleteClaim(widget.claimId);
+    final resolvedId = int.tryParse(
+      _headData?['ID']?.toString() ??
+          _headData?['ClaimID']?.toString() ??
+          _headData?['Key']?.toString() ??
+          widget.claimId.toString(),
+    ) ?? widget.claimId;
+
+    final result = await _claimService.deleteClaimWithResult(resolvedId);
 
     if (mounted) {
       setState(() {
         _isProcessing = false;
       });
 
-      if (success) {
+      if (result.success) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Claim application deleted successfully!'),
+          SnackBar(
+            content: Text(
+              result.message?.isNotEmpty == true
+                  ? result.message!
+                  : 'Claim application deleted successfully!',
+            ),
             backgroundColor: Colors.orange,
           ),
         );
         Navigator.pop(context, true);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to delete claim. Please try again.'),
+          SnackBar(
+            content: Text(
+              result.message?.isNotEmpty == true
+                  ? result.message!
+                  : 'Failed to delete claim. Please try again.',
+            ),
             backgroundColor: AppColors.error,
           ),
         );

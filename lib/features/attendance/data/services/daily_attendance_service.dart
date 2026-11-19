@@ -25,13 +25,7 @@ class DailyAttendanceService {
       int effectiveBranchId = branchId ?? 0;
       if (effectiveBranchId <= 0) {
         effectiveBranchId =
-            await LocalStorageService.getSelectedBranchId() ?? 0;
-      }
-      if (effectiveBranchId <= 0) {
-        final branches = await LocalStorageService.getBranches();
-        if (branches.isNotEmpty) {
-          effectiveBranchId = branches.first.value;
-        }
+            await LocalStorageService.getEffectiveUserBranchId();
       }
 
       // 1. Primary: Mobile CalculationPeriod API (/api/Construction/Mobile/v1/CalculationPeriod/{accessPoint}/{timeStamp}/{BranchID})

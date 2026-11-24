@@ -261,14 +261,19 @@ class _LeaveTypeDetailsPageState extends State<LeaveTypeDetailsPage> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
-                          'Leave Application Details',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
+                        const Expanded(
+                          child: Text(
+                            'Leave Application Details',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.textPrimary,
+                            ),
                           ),
                         ),
+                        const SizedBox(width: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 4),
@@ -279,7 +284,7 @@ class _LeaveTypeDetailsPageState extends State<LeaveTypeDetailsPage> {
                           child: Text(
                             statusText,
                             style: TextStyle(
-                              fontSize: 12,
+                              fontSize: 11,
                               fontWeight: FontWeight.bold,
                               color: statusTextColor,
                             ),
@@ -295,7 +300,7 @@ class _LeaveTypeDetailsPageState extends State<LeaveTypeDetailsPage> {
                     _DetailRow(
                       label: 'Leave Duration',
                       value:
-                          '$noOfLeaves ${(noOfLeaves == 1) ? "Day" : "Days"} (${summaryItem.leaveType})',
+                          '${(noOfLeaves % 1 == 0) ? noOfLeaves.toInt() : noOfLeaves} ${(noOfLeaves == 1) ? "Day" : "Days"} (${summaryItem.formattedLeaveType})',
                     ),
                     _DetailRow(
                       label: 'From Date',
@@ -382,7 +387,15 @@ class _LeaveTypeDetailsPageState extends State<LeaveTypeDetailsPage> {
                                                 color: AppColors.error,
                                               ),
                                               SizedBox(width: 8),
-                                              Text('Cancel Leave Request'),
+                                              Expanded(
+                                                child: Text(
+                                                  'Cancel Leave Request',
+                                                  style: TextStyle(
+                                                    fontSize: 17,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ),
                                             ],
                                           ),
                                           content: Text(
@@ -413,6 +426,10 @@ class _LeaveTypeDetailsPageState extends State<LeaveTypeDetailsPage> {
                                         return;
                                       }
 
+                                      final messenger =
+                                          ScaffoldMessenger.of(context);
+                                      final navigator = Navigator.of(context);
+
                                       setState(() {
                                         _cancellingKeys.add(summaryItem.key);
                                         _pendingCancellationKeys.add(summaryItem.key);
@@ -422,9 +439,7 @@ class _LeaveTypeDetailsPageState extends State<LeaveTypeDetailsPage> {
                                             summaryItem.key,
                                           );
 
-                                      final messenger =
-                                          ScaffoldMessenger.of(context);
-                                      Navigator.pop(context);
+                                      navigator.pop();
 
                                       messenger.showSnackBar(
                                         const SnackBar(
@@ -847,7 +862,7 @@ class _LeaveTypeDetailsPageState extends State<LeaveTypeDetailsPage> {
                                             ),
                                             const SizedBox(height: 2),
                                             Text(
-                                              item.leaveType,
+                                              item.formattedLeaveType,
                                               style: const TextStyle(
                                                 fontSize: 12,
                                                 fontWeight: FontWeight.w500,

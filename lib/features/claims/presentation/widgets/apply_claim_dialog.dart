@@ -36,6 +36,7 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
   bool _isSubmitting = false;
   bool _isRateStatic = false;
   String _currentRateFlag = '0';
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -164,10 +165,78 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
     });
   }
 
+  void _showWarningDialog({
+    required String title,
+    required String message,
+  }) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      useRootNavigator: true,
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: Colors.white,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: const BoxDecoration(
+                color: Color(0xFFFEF2F2),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.warning_amber_rounded,
+                color: AppColors.error,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          message,
+          style: const TextStyle(
+            fontSize: 13.5,
+            color: AppColors.textSecondary,
+            height: 1.4,
+          ),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+            ),
+            child: const Text(
+              'OK',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _submitClaim() async {
     if (_isSubmitting) return;
 
     setState(() {
+      _errorMessage = null;
       _isSubmitting = true;
     });
 
@@ -223,15 +292,16 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
 
       if (_selectedCategory == null || rate <= 0 || qty <= 0) {
         if (mounted) {
-          setState(() => _isSubmitting = false);
+          setState(() {
+            _isSubmitting = false;
+            _errorMessage =
+                'The claim sheet is blank. Please select an expense category and enter valid rate and quantity before submitting.';
+          });
         }
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Please select an expense category and enter valid rate and quantity before submitting.',
-            ),
-            backgroundColor: AppColors.error,
-          ),
+        _showWarningDialog(
+          title: 'Claim Sheet Blank',
+          message:
+              'The claim sheet is blank. Please select an expense category and enter valid rate and quantity before submitting.',
         );
         return;
       }
@@ -294,13 +364,13 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
         );
       } else {
         final errorMsg = result.errorMessage ?? 'Failed to submit claim. Please try again.';
-        debugPrint('❌ [ApplyClaimDialog] Showing Error SnackBar: $errorMsg');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMsg),
-            backgroundColor: AppColors.error,
-            duration: const Duration(seconds: 4),
-          ),
+        debugPrint('❌ [ApplyClaimDialog] Showing Error Dialog: $errorMsg');
+        setState(() {
+          _errorMessage = errorMsg;
+        });
+        _showWarningDialog(
+          title: 'Submission Failed',
+          message: errorMsg,
         );
       }
     }
@@ -705,16 +775,50 @@ class _ApplyClaimDialogState extends State<ApplyClaimDialog> {
                       const SizedBox(height: 16),
                     ],
 
+                    // Error Banner
+                    if (_errorMessage != null) ...[
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF2F2),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFFFCA5A5)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.error_outline_rounded,
+                              color: AppColors.error,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                _errorMessage!,
+                                style: const TextStyle(
+                                  color: Color(0xFF991B1B),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
                     // Submit Button
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
                         onPressed: (_isSubmitting ||
                                 _isLoadingRights ||
-                                (_userRights?.isHierarchyMissing == true) ||
-                                (_tailItems.isEmpty &&
-                                    (_selectedCategory == null ||
-                                        _currentItemAmount <= 0)))
+                                (_userRights?.isHierarchyMissing == true))
                             ? null
                             : _submitClaim,
                         child: _isSubmitting

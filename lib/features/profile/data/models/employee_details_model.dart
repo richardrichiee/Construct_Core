@@ -172,7 +172,13 @@ class EmployeeDetailsModel {
                 '0',
           ) ??
           0,
-      noOfLeavesForTheMonth: (json['NoOfLeavesforTheMonth'] as num?) ?? 0,
+      noOfLeavesForTheMonth: num.tryParse(
+            json['NoOfLeavesforTheMonth']?.toString() ??
+                json['NoOfLeavesForTheMonth']?.toString() ??
+                json['NoOfLeaves']?.toString() ??
+                '0',
+          ) ??
+          0,
       leaveBalances: balances,
       branchId: int.tryParse(
             json['BranchID']?.toString() ??

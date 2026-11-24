@@ -91,9 +91,11 @@ class ClaimService {
     try {
       final accessPoint = await _getValidAccessPoint();
       if (accessPoint == null) return [];
-      
+
       // 1. Try dedicated ClaimMaster List endpoint first
-      final masterListUrl = AppUrls.getClaimMasterListUrl(accessPoint: accessPoint);
+      final masterListUrl = AppUrls.getClaimMasterListUrl(
+        accessPoint: accessPoint,
+      );
       try {
         final res = await _dio.get(
           masterListUrl,
@@ -101,11 +103,16 @@ class ClaimService {
         );
         if (res.statusCode == 200 && res.data != null) {
           final data = res.data;
-          if (data['value'] != null && data['value'] is List && (data['value'] as List).isNotEmpty) {
+          if (data['value'] != null &&
+              data['value'] is List &&
+              (data['value'] as List).isNotEmpty) {
             final list = data['value'] as List;
             final items = list
                 .whereType<Map>()
-                .map((item) => ClaimMasterItem.fromJson(Map<String, dynamic>.from(item)))
+                .map(
+                  (item) =>
+                      ClaimMasterItem.fromJson(Map<String, dynamic>.from(item)),
+                )
                 .where((c) => c.value > 0 && c.name.isNotEmpty)
                 .toList();
             if (items.isNotEmpty) return items;
@@ -606,7 +613,9 @@ class ClaimService {
   }
 
   /// POST /api/Construction/ClaimForm/v1/Delete/{id}/{timeStamp}/{accessPoint}
-  Future<({bool success, String? message})> deleteClaimWithResult(int id) async {
+  Future<({bool success, String? message})> deleteClaimWithResult(
+    int id,
+  ) async {
     try {
       final accessPoint = await _getValidAccessPoint();
       if (accessPoint == null) {
@@ -614,15 +623,18 @@ class ClaimService {
       }
       final url = AppUrls.getDeleteClaimUrl(id: id, accessPoint: accessPoint);
 
-      debugPrint('==================== [ClaimService] DELETE CLAIM ====================');
-      debugPrint('👉 [ClaimService] Endpoint: $url | ClaimID: $id | AccessPoint: $accessPoint');
+      debugPrint(
+        '==================== [ClaimService] DELETE CLAIM ====================',
+      );
+      debugPrint(
+        '👉 [ClaimService] Endpoint: $url | ClaimID: $id | AccessPoint: $accessPoint',
+      );
 
       final response = await _dio.post(
         url,
-        data: const {},
         options: Options(
           responseType: ResponseType.plain,
-          validateStatus: (status) => status != null && status < 500,
+          validateStatus: (status) => status != null && status < 600,
           headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -630,7 +642,9 @@ class ClaimService {
         ),
       );
 
-      debugPrint('📥 [ClaimService] Delete Response Status: ${response.statusCode}');
+      debugPrint(
+        '📥 [ClaimService] Delete Response Status: ${response.statusCode}',
+      );
       debugPrint('📥 [ClaimService] Delete Response Body: ${response.data}');
 
       final code = response.statusCode ?? 0;
@@ -646,29 +660,36 @@ class ClaimService {
                   err['Message'].toString().trim().isNotEmpty) {
                 return (
                   success: false,
-                  message: err['Message'].toString().trim(),
+                  message: _cleanDeleteErrorMessage(
+                    err['Message'].toString().trim(),
+                  ),
                 );
               }
               final val = decoded['value'];
               if (val is List && val.isNotEmpty && val.first is Map) {
                 final first = val.first as Map;
-                final rawMsg = (first['ERRORMESSAGE'] ??
-                        first['ErrorMessage'] ??
-                        first['errormessage'] ??
-                        first['Message'] ??
-                        first['message'])
-                    ?.toString()
-                    .trim() ??
+                final rawMsg =
+                    (first['ERRORMESSAGE'] ??
+                            first['ErrorMessage'] ??
+                            first['errormessage'] ??
+                            first['Message'] ??
+                            first['message'])
+                        ?.toString()
+                        .trim() ??
                     '';
                 if (rawMsg.isNotEmpty) {
                   final lower = rawMsg.toLowerCase();
-                  final isSuccessMsg = lower.contains('success') ||
+                  final isSuccessMsg =
+                      lower.contains('success') ||
                       lower.contains('deleted') ||
                       lower.contains('ok') ||
                       lower == '1' ||
                       lower == 'true';
                   if (!isSuccessMsg) {
-                    return (success: false, message: rawMsg);
+                    return (
+                      success: false,
+                      message: _cleanDeleteErrorMessage(rawMsg),
+                    );
                   }
                   return (success: true, message: rawMsg);
                 }
@@ -689,8 +710,9 @@ class ClaimService {
         try {
           final decoded = jsonDecode(response.data.toString());
           if (decoded is Map) {
-            serverMsg = decoded['Message']?.toString() ??
+            serverMsg =
                 decoded['error']?['Message']?.toString() ??
+                decoded['Message']?.toString() ??
                 decoded['ExceptionMessage']?.toString();
           }
         } catch (_) {}
@@ -698,7 +720,9 @@ class ClaimService {
 
       return (
         success: false,
-        message: serverMsg ?? 'Server returned HTTP $code while deleting claim.',
+        message: _cleanDeleteErrorMessage(
+          serverMsg ?? 'Server returned HTTP $code while deleting claim.',
+        ),
       );
     } on DioException catch (dioErr) {
       debugPrint('❌ [ClaimService] deleteClaim DioException: $dioErr');
@@ -711,18 +735,43 @@ class ClaimService {
       }
       final serverData = dioErr.response?.data;
       String? msg;
-      if (serverData is Map) {
-        msg = serverData['Message']?.toString() ??
-            serverData['error']?['Message']?.toString();
+      if (serverData != null) {
+        try {
+          final decoded = serverData is Map
+              ? serverData
+              : jsonDecode(serverData.toString());
+          if (decoded is Map) {
+            msg =
+                decoded['error']?['Message']?.toString() ??
+                decoded['Message']?.toString() ??
+                decoded['ExceptionMessage']?.toString();
+          }
+        } catch (_) {}
       }
       return (
         success: false,
-        message: msg ?? dioErr.message ?? 'Network error deleting claim.',
+        message: _cleanDeleteErrorMessage(
+          msg ?? 'Server error ($code) while deleting claim.',
+        ),
       );
     } catch (e) {
       debugPrint('❌ [ClaimService] deleteClaim error: $e');
-      return (success: false, message: e.toString());
+      return (success: false, message: _cleanDeleteErrorMessage(e.toString()));
     }
+  }
+
+  static String _cleanDeleteErrorMessage(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return 'Failed to delete claim. Please try again.';
+    if (trimmed.contains('validateStatus') ||
+        trimmed.contains('status code of')) {
+      return 'Server error occurred while deleting claim. Please try again later.';
+    }
+    if (trimmed.contains('\n')) {
+      final firstLine = trimmed.split(RegExp(r'\r?\n')).first.trim();
+      if (firstLine.isNotEmpty && firstLine.length <= 150) return firstLine;
+    }
+    return trimmed.length > 150 ? '${trimmed.substring(0, 147)}...' : trimmed;
   }
 
   /// Backward-compatible boolean wrapper

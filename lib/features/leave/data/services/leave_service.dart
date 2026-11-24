@@ -344,7 +344,16 @@ class LeaveService {
           }
           final cleanErr = _extractCleanErrorMessage(data);
           if (cleanErr.isNotEmpty) {
-            return LeaveCalculationResult(days: 0.0, errorMessage: cleanErr);
+            String userFriendlyErr = cleanErr;
+            if (cleanErr.toLowerCase().contains('subquery') ||
+                cleanErr.toLowerCase().contains('statement has been terminated')) {
+              userFriendlyErr =
+                  'Server error calculating leave balance (multiple branch records exist for this leave type in the database). Please contact your administrator.';
+            }
+            return LeaveCalculationResult(
+              days: 0.0,
+              errorMessage: userFriendlyErr,
+            );
           }
         }
       }

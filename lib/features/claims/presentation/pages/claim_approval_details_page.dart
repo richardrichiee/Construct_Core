@@ -248,6 +248,10 @@ class _ClaimApprovalDetailsPageState extends State<ClaimApprovalDetailsPage> {
                   : 'Claim application deleted successfully!',
             ),
             backgroundColor: Colors.orange,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
           ),
         );
         Navigator.pop(context, true);
@@ -260,6 +264,11 @@ class _ClaimApprovalDetailsPageState extends State<ClaimApprovalDetailsPage> {
                   : 'Failed to delete claim. Please try again.',
             ),
             backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
           ),
         );
       }

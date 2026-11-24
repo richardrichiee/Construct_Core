@@ -253,9 +253,18 @@ class _InboxCategoryDetailsPageState extends State<InboxCategoryDetailsPage> {
               }
             }
 
+            final rawLeaveType = item['LeaveType']?.toString();
+            final formattedLeaveType = (rawLeaveType == '2' ||
+                    rawLeaveType?.toLowerCase() == 'half day')
+                ? 'Half Day'
+                : (rawLeaveType == '1' ||
+                        rawLeaveType?.toLowerCase() == 'full day')
+                    ? 'Full Day'
+                    : rawLeaveType;
+
             final type =
                 item['ClaimType']?.toString() ??
-                item['LeaveType']?.toString() ??
+                formattedLeaveType ??
                 item['ExpenseType']?.toString() ??
                 item['Category']?.toString() ??
                 (parsedMenuName != null && parsedMenuName.isNotEmpty

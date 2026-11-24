@@ -36,10 +36,10 @@ class _ClaimsPageState extends State<ClaimsPage> {
     setState(() => _isLoading = true);
     final effectiveBranchId =
         await LocalStorageService.getEffectiveUserBranchId();
-    final branchName =
-        await LocalStorageService.getEffectiveUserBranchName();
-    final rightsFuture =
-        _claimService.fetchClaimUserRights(branchId: effectiveBranchId);
+    final branchName = await LocalStorageService.getEffectiveUserBranchName();
+    final rightsFuture = _claimService.fetchClaimUserRights(
+      branchId: effectiveBranchId,
+    );
 
     final fDate = _filterFromDate != null
         ? DateFormat('dd/MM/yyyy').format(_filterFromDate!)
@@ -63,7 +63,9 @@ class _ClaimsPageState extends State<ClaimsPage> {
         _homeBranchName = branchName;
         _isLoading = false;
       });
-      debugPrint('📋 [ClaimsPage] Loaded ${_claims.length} claims for period "$fDate" - "$tDate"');
+      debugPrint(
+        '📋 [ClaimsPage] Loaded ${_claims.length} claims for period "$fDate" - "$tDate"',
+      );
     }
   }
 
@@ -199,7 +201,9 @@ class _ClaimsPageState extends State<ClaimsPage> {
                           },
                           child: Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 12),
+                              horizontal: 12,
+                              vertical: 12,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.grey.shade100,
                               borderRadius: BorderRadius.circular(10),
@@ -207,8 +211,11 @@ class _ClaimsPageState extends State<ClaimsPage> {
                             ),
                             child: Row(
                               children: [
-                                const Icon(Icons.calendar_today_rounded,
-                                    size: 15, color: AppColors.primary),
+                                const Icon(
+                                  Icons.calendar_today_rounded,
+                                  size: 15,
+                                  color: AppColors.primary,
+                                ),
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
@@ -231,10 +238,13 @@ class _ClaimsPageState extends State<ClaimsPage> {
                       ),
                       const Padding(
                         padding: EdgeInsets.symmetric(horizontal: 8),
-                        child: Text('-',
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.textMuted)),
+                        child: Text(
+                          '-',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textMuted,
+                          ),
+                        ),
                       ),
                       Expanded(
                         child: GestureDetector(
@@ -251,7 +261,9 @@ class _ClaimsPageState extends State<ClaimsPage> {
                           },
                           child: Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 12),
+                              horizontal: 12,
+                              vertical: 12,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.grey.shade100,
                               borderRadius: BorderRadius.circular(10),
@@ -259,8 +271,11 @@ class _ClaimsPageState extends State<ClaimsPage> {
                             ),
                             child: Row(
                               children: [
-                                const Icon(Icons.calendar_today_rounded,
-                                    size: 15, color: AppColors.primary),
+                                const Icon(
+                                  Icons.calendar_today_rounded,
+                                  size: 15,
+                                  color: AppColors.primary,
+                                ),
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
@@ -364,10 +379,7 @@ class _ClaimsPageState extends State<ClaimsPage> {
           children: [
             const Text(
               'Claims & Reimbursements',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             if (_homeBranchName != null && _homeBranchName!.isNotEmpty)
               Text(
@@ -414,35 +426,40 @@ class _ClaimsPageState extends State<ClaimsPage> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : !canView
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(32.0),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: const [
-                        Icon(Icons.lock_person_outlined,
-                            size: 56, color: AppColors.error),
-                        SizedBox(height: 16),
-                        Text(
-                          'Access Restricted',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'You do not have permission (ViewRight) to access Claims & Reimbursements. Please contact your system administrator.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              fontSize: 13, color: AppColors.textMuted),
-                        ),
-                      ],
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: const [
+                    Icon(
+                      Icons.lock_person_outlined,
+                      size: 56,
+                      color: AppColors.error,
                     ),
-                  ),
-                )
-              : _buildClaimsView(),
+                    SizedBox(height: 16),
+                    Text(
+                      'Access Restricted',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'You do not have permission (ViewRight) to access Claims & Reimbursements. Please contact your system administrator.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : _buildClaimsView(),
       floatingActionButton: (canView && canAdd)
           ? FloatingActionButton.extended(
               onPressed: _showApplyClaimModal,
@@ -451,7 +468,9 @@ class _ClaimsPageState extends State<ClaimsPage> {
               label: const Text(
                 'Apply Claim',
                 style: TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.bold),
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             )
           : null,
@@ -515,15 +534,24 @@ class _ClaimsPageState extends State<ClaimsPage> {
             // Active Date Filter Indicator (if filter applied)
             if (_filterFromDate != null || _filterToDate != null) ...[
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: AppColors.primary.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+                  border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.2),
+                  ),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.filter_alt_outlined, size: 16, color: AppColors.primary),
+                    const Icon(
+                      Icons.filter_alt_outlined,
+                      size: 16,
+                      color: AppColors.primary,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -543,7 +571,11 @@ class _ClaimsPageState extends State<ClaimsPage> {
                         });
                         _loadClaimsData();
                       },
-                      child: const Icon(Icons.close_rounded, size: 16, color: AppColors.primary),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        size: 16,
+                        color: AppColors.primary,
+                      ),
                     ),
                   ],
                 ),
@@ -564,8 +596,10 @@ class _ClaimsPageState extends State<ClaimsPage> {
                 ),
                 Text(
                   '${_claims.length} records',
-                  style:
-                      const TextStyle(fontSize: 12, color: AppColors.textMuted),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textMuted,
+                  ),
                 ),
               ],
             ),
@@ -582,8 +616,11 @@ class _ClaimsPageState extends State<ClaimsPage> {
                 ),
                 child: Column(
                   children: const [
-                    Icon(Icons.receipt_long_outlined,
-                        size: 40, color: AppColors.textMuted),
+                    Icon(
+                      Icons.receipt_long_outlined,
+                      size: 40,
+                      color: AppColors.textMuted,
+                    ),
                     SizedBox(height: 8),
                     Text(
                       'No claims found for this period',
@@ -676,7 +713,9 @@ class _ClaimsPageState extends State<ClaimsPage> {
                               ),
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 4),
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
                                 decoration: BoxDecoration(
                                   color: statusBg,
                                   borderRadius: BorderRadius.circular(20),
@@ -693,14 +732,19 @@ class _ClaimsPageState extends State<ClaimsPage> {
                             ],
                           ),
                           const Divider(
-                              height: 20, color: AppColors.cardBorder),
+                            height: 20,
+                            color: AppColors.cardBorder,
+                          ),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Row(
                                 children: [
-                                  const Icon(Icons.date_range_outlined,
-                                      size: 15, color: AppColors.textMuted),
+                                  const Icon(
+                                    Icons.date_range_outlined,
+                                    size: 15,
+                                    color: AppColors.textMuted,
+                                  ),
                                   const SizedBox(width: 6),
                                   Text(
                                     item.claimDate.isNotEmpty
@@ -737,8 +781,6 @@ class _ClaimsPageState extends State<ClaimsPage> {
     );
   }
 }
-
-
 
 class _ClaimSummaryCard extends StatelessWidget {
   final String title;
@@ -781,10 +823,7 @@ class _ClaimSummaryCard extends StatelessWidget {
           ),
           Text(
             title,
-            style: const TextStyle(
-              fontSize: 12,
-              color: AppColors.textMuted,
-            ),
+            style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
           ),
         ],
       ),

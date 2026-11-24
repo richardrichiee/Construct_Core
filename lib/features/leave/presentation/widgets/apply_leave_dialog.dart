@@ -119,7 +119,7 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
 
       if (showPopup && errorText != null && errorText.isNotEmpty) {
         _showWarningDialog(
-          title: 'warning',
+          title: 'Warning',
           message: errorText,
         );
       }
@@ -861,7 +861,12 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
                           (_hasUserInteracted &&
                                   (_calculationError != null ||
                                       _calculatedDays <= 0))
-                              ? 'Blocked: Leave Exceeded'
+                              ? (_calculationError != null &&
+                                      (_calculationError!.toLowerCase().contains('exceed') ||
+                                          _calculationError!.toLowerCase().contains('insufficient') ||
+                                          _calculationError!.toLowerCase().contains('balance'))
+                                  ? 'Blocked: Leave Exceeded'
+                                  : 'Cannot Apply')
                               : 'Submit',
                           style: const TextStyle(
                             fontSize: 15,

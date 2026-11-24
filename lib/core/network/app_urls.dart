@@ -18,7 +18,10 @@ class AppUrls {
     required String password,
   }) {
     final time = timestamp;
-    return '${baseUrl}api/Construction/Mobile/v1/Login/$accessPoint/$time/$loginId/$password';
+    final encodedLogin = Uri.encodeComponent(loginId.trim());
+    final encodedPass = Uri.encodeComponent(password);
+    // Trailing slash ensures IIS does not treat passwords containing dots (e.g. welco.e) as static file extensions
+    return '${baseUrl}api/Construction/Mobile/v1/Login/$accessPoint/$time/$encodedLogin/$encodedPass/';
   }
 
   /// Endpoint: /api/Construction/Mobile/v1/BranchList/{accessPoint}/{timeStamp}/{UserID}

@@ -40,7 +40,6 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
   String _branchStartTime = '08:00:00';
   String _branchEndTime = '18:00:00';
 
-  List<BranchModel> _branches = [];
   BranchModel? _selectedBranch;
 
   List<CalculationPeriodItem> _calcPeriods = [];
@@ -331,7 +330,6 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
       setState(() {
         _branchStartTime = branchStartTime;
         _branchEndTime = branchEndTime;
-        _branches = branches;
         _selectedBranch = selectedBranch;
         _calcPeriods = periods;
         _selectedPeriod = selectedPeriod;
@@ -523,7 +521,7 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
 
     final firstId = _workers.isNotEmpty ? _workers.first.dailyAttendId : 0;
 
-    print(
+    debugPrint(
       '💾 [DailyAttendancePage] Saving ${_workers.length} workers for date: $_selectedDate, period: ${_selectedPeriod?.id}, branch: ${_selectedBranch?.value}...',
     );
     final result = await _service.saveDailyAttendance(
@@ -534,7 +532,7 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
       workers: _workers,
     );
 
-    print(
+    debugPrint(
       '💾 [DailyAttendancePage] Save result: isSuccess=${result.isSuccess}, errorMessage=${result.errorMessage}, rawResponse=${jsonEncode(result.rawResponse)}',
     );
 
@@ -1714,7 +1712,7 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
                   color: hasActiveFilters
-                      ? AppColors.primary.withOpacity(0.08)
+                      ? AppColors.primary.withValues(alpha: 0.08)
                       : const Color(0xFFF1F5F9),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
@@ -1790,9 +1788,9 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
                           color: AppColors.primary,
                         ),
                       ),
-                      backgroundColor: AppColors.primary.withOpacity(0.08),
+                      backgroundColor: AppColors.primary.withValues(alpha: 0.08),
                       side: BorderSide(
-                        color: AppColors.primary.withOpacity(0.3),
+                        color: AppColors.primary.withValues(alpha: 0.3),
                       ),
                       deleteIcon: const Icon(Icons.close_rounded, size: 14),
                       deleteIconColor: AppColors.primary,
@@ -1819,9 +1817,9 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
                           color: AppColors.primary,
                         ),
                       ),
-                      backgroundColor: AppColors.primary.withOpacity(0.08),
+                      backgroundColor: AppColors.primary.withValues(alpha: 0.08),
                       side: BorderSide(
-                        color: AppColors.primary.withOpacity(0.3),
+                        color: AppColors.primary.withValues(alpha: 0.3),
                       ),
                       deleteIcon: const Icon(Icons.close_rounded, size: 14),
                       deleteIconColor: AppColors.primary,

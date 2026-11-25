@@ -39,10 +39,29 @@ class EmployeeService {
           final tableList = data['value']['Table'] as List;
           final table1List = data['value']['Table1'] as List? ?? [];
           if (tableList.isNotEmpty) {
-            return EmployeeDetailsModel.fromJson(
+            final details = EmployeeDetailsModel.fromJson(
               tableList.first as Map<String, dynamic>,
               table1: table1List,
             );
+            if (details.branchId > 0) {
+              final existingDefault =
+                  await LocalStorageService.getUserDefaultBranchId();
+              if (existingDefault == null || existingDefault <= 0) {
+                await LocalStorageService.saveUserDefaultBranchId(
+                  details.branchId,
+                );
+              }
+            }
+            if (details.branchName.isNotEmpty) {
+              final existingDefaultName =
+                  await LocalStorageService.getUserDefaultBranchName();
+              if (existingDefaultName == null || existingDefaultName.isEmpty) {
+                await LocalStorageService.saveUserDefaultBranchName(
+                  details.branchName,
+                );
+              }
+            }
+            return details;
           }
         }
       }

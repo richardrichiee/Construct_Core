@@ -40,7 +40,6 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
   String _branchStartTime = '08:00:00';
   String _branchEndTime = '18:00:00';
 
-  List<BranchModel> _branches = [];
   BranchModel? _selectedBranch;
 
   List<CalculationPeriodItem> _calcPeriods = [];
@@ -263,7 +262,11 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
       }
 
       final cachedBranches = await LocalStorageService.getBranches();
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
+      // Daily Attendance strictly belongs to the user's dedicated home/default branch from login
+      final effectiveBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
+      final homeBranchName =
+          await LocalStorageService.getEffectiveUserBranchName();
 
       var branches = cachedBranches;
       if (branches.isEmpty) {
@@ -272,14 +275,21 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
 
       BranchModel? selectedBranch;
       if (branches.isNotEmpty) {
-        if (savedBranchId != null) {
+        if (effectiveBranchId > 0) {
           selectedBranch = branches.firstWhere(
-            (b) => b.value == savedBranchId,
+            (b) => b.value == effectiveBranchId,
             orElse: () => branches.first,
           );
         } else {
           selectedBranch = branches.first;
         }
+      } else if (effectiveBranchId > 0) {
+        selectedBranch = BranchModel(
+          value: effectiveBranchId,
+          name: homeBranchName.isNotEmpty ? homeBranchName : 'Head Office',
+          branchStartTime: branchStartTime,
+          branchEndTime: branchEndTime,
+        );
       }
 
       if (widget.initialBranchStartTime == null &&
@@ -320,7 +330,6 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
       setState(() {
         _branchStartTime = branchStartTime;
         _branchEndTime = branchEndTime;
-        _branches = branches;
         _selectedBranch = selectedBranch;
         _calcPeriods = periods;
         _selectedPeriod = selectedPeriod;
@@ -512,7 +521,7 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
 
     final firstId = _workers.isNotEmpty ? _workers.first.dailyAttendId : 0;
 
-    print(
+    debugPrint(
       '💾 [DailyAttendancePage] Saving ${_workers.length} workers for date: $_selectedDate, period: ${_selectedPeriod?.id}, branch: ${_selectedBranch?.value}...',
     );
     final result = await _service.saveDailyAttendance(
@@ -523,7 +532,7 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
       workers: _workers,
     );
 
-    print(
+    debugPrint(
       '💾 [DailyAttendancePage] Save result: isSuccess=${result.isSuccess}, errorMessage=${result.errorMessage}, rawResponse=${jsonEncode(result.rawResponse)}',
     );
 
@@ -1086,13 +1095,28 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
       child: Scaffold(
         backgroundColor: const Color(0xFFF8FAFC),
         appBar: AppBar(
-          title: Text(
-            'Daily Attendance',
-            style: GoogleFonts.plusJakartaSans(
-              fontWeight: FontWeight.bold,
-              fontSize: 18,
-              color: const Color(0xFF0F172A),
-            ),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Daily Attendance',
+                style: GoogleFonts.plusJakartaSans(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  color: const Color(0xFF0F172A),
+                ),
+              ),
+              if (_selectedBranch != null && _selectedBranch!.name.isNotEmpty)
+                Text(
+                  _selectedBranch!.name,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    color: const Color(0xFF64748B),
+                  ),
+                ),
+            ],
           ),
           backgroundColor: Colors.white,
           elevation: 0,
@@ -1688,7 +1712,7 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
                   color: hasActiveFilters
-                      ? AppColors.primary.withOpacity(0.08)
+                      ? AppColors.primary.withValues(alpha: 0.08)
                       : const Color(0xFFF1F5F9),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
@@ -1764,9 +1788,9 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
                           color: AppColors.primary,
                         ),
                       ),
-                      backgroundColor: AppColors.primary.withOpacity(0.08),
+                      backgroundColor: AppColors.primary.withValues(alpha: 0.08),
                       side: BorderSide(
-                        color: AppColors.primary.withOpacity(0.3),
+                        color: AppColors.primary.withValues(alpha: 0.3),
                       ),
                       deleteIcon: const Icon(Icons.close_rounded, size: 14),
                       deleteIconColor: AppColors.primary,
@@ -1793,9 +1817,9 @@ class _DailyAttendancePageState extends State<DailyAttendancePage> {
                           color: AppColors.primary,
                         ),
                       ),
-                      backgroundColor: AppColors.primary.withOpacity(0.08),
+                      backgroundColor: AppColors.primary.withValues(alpha: 0.08),
                       side: BorderSide(
-                        color: AppColors.primary.withOpacity(0.3),
+                        color: AppColors.primary.withValues(alpha: 0.3),
                       ),
                       deleteIcon: const Icon(Icons.close_rounded, size: 14),
                       deleteIconColor: AppColors.primary,

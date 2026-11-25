@@ -43,15 +43,14 @@ class ClaimService {
   }
 
   /// GET /api/Construction/General/v1/GetUserRights/{timeStamp}/{accessPoint}/15/{userId}/{branchId}
-  Future<UserRightsModel?> fetchClaimUserRights() async {
+  Future<UserRightsModel?> fetchClaimUserRights({int? branchId}) async {
     try {
       final accessPoint = await _getValidAccessPoint();
       if (accessPoint == null) return UserRightsModel.noAccess();
       final user = await LocalStorageService.getUser();
       final userId = user?.userId ?? 2;
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
-      final branchId =
-          (savedBranchId != null && savedBranchId > 0) ? savedBranchId : 1;
+      final effectiveBranchId =
+          branchId ?? await LocalStorageService.getEffectiveUserBranchId();
 
       final claimMenuCode = await LocalStorageService.getMenuCodeForModule(
         MenuModuleType.claim,
@@ -62,7 +61,7 @@ class ClaimService {
         accessPoint: accessPoint,
         menuCode: claimMenuCode,
         userId: userId,
-        branchId: branchId,
+        branchId: effectiveBranchId,
       );
 
       final response = await _dio.get(
@@ -92,9 +91,11 @@ class ClaimService {
     try {
       final accessPoint = await _getValidAccessPoint();
       if (accessPoint == null) return [];
-      
+
       // 1. Try dedicated ClaimMaster List endpoint first
-      final masterListUrl = AppUrls.getClaimMasterListUrl(accessPoint: accessPoint);
+      final masterListUrl = AppUrls.getClaimMasterListUrl(
+        accessPoint: accessPoint,
+      );
       try {
         final res = await _dio.get(
           masterListUrl,
@@ -102,11 +103,16 @@ class ClaimService {
         );
         if (res.statusCode == 200 && res.data != null) {
           final data = res.data;
-          if (data['value'] != null && data['value'] is List && (data['value'] as List).isNotEmpty) {
+          if (data['value'] != null &&
+              data['value'] is List &&
+              (data['value'] as List).isNotEmpty) {
             final list = data['value'] as List;
             final items = list
                 .whereType<Map>()
-                .map((item) => ClaimMasterItem.fromJson(Map<String, dynamic>.from(item)))
+                .map(
+                  (item) =>
+                      ClaimMasterItem.fromJson(Map<String, dynamic>.from(item)),
+                )
                 .where((c) => c.value > 0 && c.name.isNotEmpty)
                 .toList();
             if (items.isNotEmpty) return items;
@@ -259,27 +265,38 @@ class ClaimService {
       debugPrint('💰 Total Amount: $totalAmount');
       debugPrint('📝 Remarks: $remarks');
 
+      final effectiveBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
+      final branchId = effectiveBranchId.toString();
+
       // Check transaction hierarchy from UserRights (dynamic Claim MenuCode):
+      // If hierarchy is required (HeirarchyNeeded == 1) but not assigned to this user, block submission.
       // If transactions == 3, the user has Level 3 approval authority (Manager) -> Approve directly ('A')
       String finalApprovalStatus = approvalStatus ?? 'N';
-      if (finalApprovalStatus != 'A') {
-        try {
-          final claimMenuCode = await LocalStorageService.getMenuCodeForModule(
-            MenuModuleType.claim,
-            fallback: 5121,
+      try {
+        final claimMenuCode = await LocalStorageService.getMenuCodeForModule(
+          MenuModuleType.claim,
+          fallback: 5121,
+        );
+        final rights = await UserRightsService().fetchUserRights(
+          menuCode: claimMenuCode,
+          branchId: effectiveBranchId,
+        );
+        debugPrint(
+          '🔑 UserRights for MenuCode $claimMenuCode: transactions=${rights.transactions}, hierarchyNeeded=${rights.heirarchyNeeded}, hierarchyId=${rights.hierarchyId}, userCode=${rights.userCode}',
+        );
+        if (rights.isHierarchyMissing) {
+          return ClaimSaveResult(
+            success: false,
+            errorMessage: 'Need to set Hierarchy for this user',
+            approvalStatus: finalApprovalStatus,
           );
-          final rights = await UserRightsService().fetchUserRights(
-            menuCode: claimMenuCode,
-          );
-          debugPrint(
-            '🔑 UserRights for MenuCode $claimMenuCode: transactions=${rights.transactions}, add=${rights.addRight}, edit=${rights.modiRight}',
-          );
-          if (rights.transactions == 3) {
-            finalApprovalStatus = 'A';
-          }
-        } catch (err) {
-          debugPrint('⚠️ Error fetching user rights for claims: $err');
         }
+        if (finalApprovalStatus != 'A' && rights.transactions == 3) {
+          finalApprovalStatus = 'A';
+        }
+      } catch (err) {
+        debugPrint('⚠️ Error fetching user rights for claims: $err');
       }
 
       debugPrint('🛡️ Final ApprovalStatus for Claim: $finalApprovalStatus');
@@ -298,10 +315,6 @@ class ClaimService {
         }
         return json;
       }).toList();
-
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
-      final branchId =
-          (savedBranchId != null && savedBranchId > 0) ? savedBranchId.toString() : "1";
 
       final payload = {
         "Head": {
@@ -600,15 +613,28 @@ class ClaimService {
   }
 
   /// POST /api/Construction/ClaimForm/v1/Delete/{id}/{timeStamp}/{accessPoint}
-  Future<bool> deleteClaim(int id) async {
+  Future<({bool success, String? message})> deleteClaimWithResult(
+    int id,
+  ) async {
     try {
       final accessPoint = await _getValidAccessPoint();
-      if (accessPoint == null) return false;
+      if (accessPoint == null) {
+        return (success: false, message: 'Access point not configured.');
+      }
       final url = AppUrls.getDeleteClaimUrl(id: id, accessPoint: accessPoint);
+
+      debugPrint(
+        '==================== [ClaimService] DELETE CLAIM ====================',
+      );
+      debugPrint(
+        '👉 [ClaimService] Endpoint: $url | ClaimID: $id | AccessPoint: $accessPoint',
+      );
 
       final response = await _dio.post(
         url,
         options: Options(
+          responseType: ResponseType.plain,
+          validateStatus: (status) => status != null && status < 600,
           headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -616,10 +642,142 @@ class ClaimService {
         ),
       );
 
-      return response.statusCode == 200;
+      debugPrint(
+        '📥 [ClaimService] Delete Response Status: ${response.statusCode}',
+      );
+      debugPrint('📥 [ClaimService] Delete Response Body: ${response.data}');
+
+      final code = response.statusCode ?? 0;
+      if (code >= 200 && code < 300) {
+        final rawBody = response.data?.toString().trim() ?? '';
+        if (rawBody.isNotEmpty) {
+          try {
+            final decoded = jsonDecode(rawBody);
+            if (decoded is Map) {
+              final err = decoded['error'];
+              if (err is Map &&
+                  err['Message'] != null &&
+                  err['Message'].toString().trim().isNotEmpty) {
+                return (
+                  success: false,
+                  message: _cleanDeleteErrorMessage(
+                    err['Message'].toString().trim(),
+                  ),
+                );
+              }
+              final val = decoded['value'];
+              if (val is List && val.isNotEmpty && val.first is Map) {
+                final first = val.first as Map;
+                final rawMsg =
+                    (first['ERRORMESSAGE'] ??
+                            first['ErrorMessage'] ??
+                            first['errormessage'] ??
+                            first['Message'] ??
+                            first['message'])
+                        ?.toString()
+                        .trim() ??
+                    '';
+                if (rawMsg.isNotEmpty) {
+                  final lower = rawMsg.toLowerCase();
+                  final isSuccessMsg =
+                      lower.contains('success') ||
+                      lower.contains('deleted') ||
+                      lower.contains('ok') ||
+                      lower == '1' ||
+                      lower == 'true';
+                  if (!isSuccessMsg) {
+                    return (
+                      success: false,
+                      message: _cleanDeleteErrorMessage(rawMsg),
+                    );
+                  }
+                  return (success: true, message: rawMsg);
+                }
+              }
+            }
+          } catch (_) {
+            // Non-JSON or empty 204/200 body still counts as success
+          }
+        }
+        return (
+          success: true,
+          message: 'Claim application deleted successfully!',
+        );
+      }
+
+      String? serverMsg;
+      if (response.data != null) {
+        try {
+          final decoded = jsonDecode(response.data.toString());
+          if (decoded is Map) {
+            serverMsg =
+                decoded['error']?['Message']?.toString() ??
+                decoded['Message']?.toString() ??
+                decoded['ExceptionMessage']?.toString();
+          }
+        } catch (_) {}
+      }
+
+      return (
+        success: false,
+        message: _cleanDeleteErrorMessage(
+          serverMsg ?? 'Server returned HTTP $code while deleting claim.',
+        ),
+      );
+    } on DioException catch (dioErr) {
+      debugPrint('❌ [ClaimService] deleteClaim DioException: $dioErr');
+      final code = dioErr.response?.statusCode;
+      if (code != null && code >= 200 && code < 300) {
+        return (
+          success: true,
+          message: 'Claim application deleted successfully!',
+        );
+      }
+      final serverData = dioErr.response?.data;
+      String? msg;
+      if (serverData != null) {
+        try {
+          final decoded = serverData is Map
+              ? serverData
+              : jsonDecode(serverData.toString());
+          if (decoded is Map) {
+            msg =
+                decoded['error']?['Message']?.toString() ??
+                decoded['Message']?.toString() ??
+                decoded['ExceptionMessage']?.toString();
+          }
+        } catch (_) {}
+      }
+      return (
+        success: false,
+        message: _cleanDeleteErrorMessage(
+          msg ?? 'Server error ($code) while deleting claim.',
+        ),
+      );
     } catch (e) {
-      return false;
+      debugPrint('❌ [ClaimService] deleteClaim error: $e');
+      return (success: false, message: _cleanDeleteErrorMessage(e.toString()));
     }
+  }
+
+  static String _cleanDeleteErrorMessage(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return 'Failed to delete claim. Please try again.';
+    if (trimmed.contains('validateStatus') ||
+        trimmed.contains('status code of')) {
+      return 'Server error occurred while deleting claim. Please try again later.';
+    }
+    if (trimmed.contains('\n')) {
+      final firstLine = trimmed.split(RegExp(r'\r?\n')).first.trim();
+      if (firstLine.isNotEmpty && firstLine.length <= 150) return firstLine;
+    }
+    return trimmed.length > 150 ? '${trimmed.substring(0, 147)}...' : trimmed;
+  }
+
+  /// Backward-compatible boolean wrapper
+  Future<bool> deleteClaim(int id) async {
+    final res = await deleteClaimWithResult(id);
+    return res.success;
   }
 
   /// POST /api/Construction/ClaimForm/v1/EmpSearch/{timeStamp}/{accessPoint}
@@ -632,15 +790,14 @@ class ClaimService {
       if (accessPoint == null) return [];
       final user = await LocalStorageService.getUser();
       final userId = user?.userId ?? 2;
-      final savedBranchId = await LocalStorageService.getSelectedBranchId();
-      final branchId =
-          (savedBranchId != null && savedBranchId > 0) ? savedBranchId : 1;
+      final effectiveBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
 
       final url = AppUrls.getClaimEmpSearchUrl(accessPoint: accessPoint);
 
       final payload = {
         "Head": {
-          "BranchID": branchId.toString(),
+          "BranchID": effectiveBranchId.toString(),
           "UserID": userId.toString(),
           "FromDate": (fromDate != null && fromDate.isNotEmpty)
               ? fromDate

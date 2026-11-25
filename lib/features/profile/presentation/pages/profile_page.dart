@@ -37,19 +37,22 @@ class _ProfilePageState extends State<ProfilePage> {
         _employeeService.fetchEmployeeDashboard(),
         LocalStorageService.getUser(),
         _branchService.fetchBranches(),
-        LocalStorageService.getSelectedBranchId(),
+        LocalStorageService.getEffectiveUserBranchId(),
       ]);
 
       final details = results[0] as EmployeeDetailsModel?;
       final user = results[1] as UserModel?;
       final branches = results[2] as List<BranchModel>;
-      final savedBranchId = results[3] as int?;
+      final homeBranchId = results[3] as int?;
 
-      String? branchName;
-      if (branches.isNotEmpty) {
-        if (savedBranchId != null) {
+      final defaultBranchName =
+          await LocalStorageService.getEffectiveUserBranchName();
+      String? branchName =
+          defaultBranchName.isNotEmpty ? defaultBranchName : null;
+      if (branchName == null && branches.isNotEmpty) {
+        if (homeBranchId != null && homeBranchId > 0) {
           final match = branches.firstWhere(
-            (b) => b.id == savedBranchId,
+            (b) => b.id == homeBranchId,
             orElse: () => branches.first,
           );
           branchName = match.name;

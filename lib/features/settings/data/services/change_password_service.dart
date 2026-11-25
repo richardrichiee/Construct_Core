@@ -64,9 +64,10 @@ class ChangePasswordService {
         accessPoint: accessPoint,
       );
 
+      final trimmedPassword = newPassword.trim();
       final payload = {
         "Head": {
-          "NewPasswd": newPassword.trim(),
+          "NewPasswd": trimmedPassword,
         }
       };
 
@@ -84,7 +85,7 @@ class ChangePasswordService {
         );
       } on DioException catch (dioErr) {
         // If the newly added mobile endpoint throws an internal server error (e.g. backend index bug),
-        // fallback seamlessly to the stable ChangePassWord/v1/Save endpoint
+        // fallback seamlessly to the legacy ChangePassWord/v1/Save endpoint (expects SHA-1 hash)
         final statusCode = dioErr.response?.statusCode;
         if (statusCode == 500 || statusCode == 404 || statusCode == 400) {
           final fallbackUrl = AppUrls.getChangePasswordSaveUrl(
@@ -92,9 +93,14 @@ class ChangePasswordService {
             userId: targetId,
             accessPoint: accessPoint,
           );
+          final fallbackPayload = {
+            "Head": {
+              "NewPasswd": hashPassword(trimmedPassword),
+            }
+          };
           response = await _dio.post(
             fallbackUrl,
-            data: payload,
+            data: fallbackPayload,
             options: Options(
               headers: {
                 'Content-Type': 'application/json',

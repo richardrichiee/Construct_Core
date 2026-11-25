@@ -113,7 +113,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
-                'Biometric unlock is not set up on this device. Please add Fingerprint or Face unlock in phone Settings.',
+                'Device unlock is not set up on this device. Please set up Face ID, fingerprint, or a device passcode/PIN in phone Settings.',
               ),
               behavior: SnackBarBehavior.floating,
             ),

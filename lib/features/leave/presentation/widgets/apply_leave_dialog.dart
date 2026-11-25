@@ -55,18 +55,26 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
     _triggerCalculation(showPopup: false);
   }
 
+  String? _homeBranchName;
+
   Future<void> _loadUserRights() async {
     try {
       final leaveMenuCode = await LocalStorageService.getMenuCodeForModule(
         MenuModuleType.leave,
         fallback: 5105,
       );
+      final effectiveBranchId =
+          await LocalStorageService.getEffectiveUserBranchId();
+      final branchName =
+          await LocalStorageService.getEffectiveUserBranchName();
       final rights = await _userRightsService.fetchUserRights(
         menuCode: leaveMenuCode,
+        branchId: effectiveBranchId,
       );
       if (mounted) {
         setState(() {
           _userRights = rights;
+          _homeBranchName = branchName;
         });
       }
     } catch (_) {}
@@ -111,7 +119,7 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
 
       if (showPopup && errorText != null && errorText.isNotEmpty) {
         _showWarningDialog(
-          title: 'warning',
+          title: 'Warning',
           message: errorText,
         );
       }
@@ -154,6 +162,14 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
           content: Text('Calculating leave days, please wait...'),
           duration: Duration(seconds: 1),
         ),
+      );
+      return;
+    }
+
+    if (_userRights?.isHierarchyMissing == true) {
+      _showWarningDialog(
+        title: 'warning',
+        message: 'Need to set Hierarchy for this user',
       );
       return;
     }
@@ -438,13 +454,32 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    'Apply For Leave',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
-                    ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Apply For Leave',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      if (_homeBranchName != null &&
+                          _homeBranchName!.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2.0),
+                          child: Text(
+                            _homeBranchName!,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                   IconButton(
                     icon: const Icon(Icons.close_rounded, size: 20),
@@ -826,7 +861,12 @@ class _ApplyLeaveDialogState extends State<ApplyLeaveDialog> {
                           (_hasUserInteracted &&
                                   (_calculationError != null ||
                                       _calculatedDays <= 0))
-                              ? 'Blocked: Leave Exceeded'
+                              ? (_calculationError != null &&
+                                      (_calculationError!.toLowerCase().contains('exceed') ||
+                                          _calculationError!.toLowerCase().contains('insufficient') ||
+                                          _calculationError!.toLowerCase().contains('balance'))
+                                  ? 'Blocked: Leave Exceeded'
+                                  : 'Cannot Apply')
                               : 'Submit',
                           style: const TextStyle(
                             fontSize: 15,

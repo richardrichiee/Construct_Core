@@ -25,13 +25,7 @@ class DailyAttendanceService {
       int effectiveBranchId = branchId ?? 0;
       if (effectiveBranchId <= 0) {
         effectiveBranchId =
-            await LocalStorageService.getSelectedBranchId() ?? 0;
-      }
-      if (effectiveBranchId <= 0) {
-        final branches = await LocalStorageService.getBranches();
-        if (branches.isNotEmpty) {
-          effectiveBranchId = branches.first.value;
-        }
+            await LocalStorageService.getEffectiveUserBranchId();
       }
 
       // 1. Primary: Mobile CalculationPeriod API (/api/Construction/Mobile/v1/CalculationPeriod/{accessPoint}/{timeStamp}/{BranchID})
@@ -282,11 +276,6 @@ class DailyAttendanceService {
         },
       };
 
-      print('================================================================');
-      print('🔍 [DAILY ATTENDANCE FETCH REQUEST]');
-      print('URL: $url');
-      print('PAYLOAD: ${jsonEncode(payload)}');
-      print('================================================================');
       debugPrint(
         '🔍 [DAILY ATTENDANCE FETCH REQUEST] URL: $url PAYLOAD: ${jsonEncode(payload)}',
       );
@@ -302,11 +291,6 @@ class DailyAttendanceService {
         ),
       );
 
-      print('================================================================');
-      print('📦 [DAILY ATTENDANCE FETCH RESPONSE]');
-      print('HTTP STATUS: ${response.statusCode}');
-      print('RAW RESPONSE DATA: ${jsonEncode(response.data)}');
-      print('================================================================');
       debugPrint(
         '📦 [DAILY ATTENDANCE FETCH RESPONSE] STATUS: ${response.statusCode} DATA: ${jsonEncode(response.data)}',
       );
@@ -404,16 +388,6 @@ class DailyAttendanceService {
         'Tail': workers.map((w) => w.toTailJson(targetDate: date)).toList(),
       };
 
-      print('================================================================');
-      print('🚀 [DAILY ATTENDANCE SAVE REQUEST]');
-      print('URL: $url');
-      print(
-        'PARAMS: id=$id, calcId=$calcId, userId=$userId, branchId=$branchId, finYearId=$effectiveFinYearId, accessPoint=$accessPoint',
-      );
-      print('HEAD: ${jsonEncode(payload['Head'])}');
-      print('WORKERS COUNT: ${workers.length}');
-      print('FULL PAYLOAD: ${jsonEncode(payload)}');
-      print('================================================================');
       debugPrint('🚀 [DAILY ATTENDANCE SAVE REQUEST] URL: $url');
       debugPrint(
         '🚀 [DAILY ATTENDANCE SAVE REQUEST] PAYLOAD: ${jsonEncode(payload)}',
@@ -430,11 +404,6 @@ class DailyAttendanceService {
         ),
       );
 
-      print('================================================================');
-      print('📥 [DAILY ATTENDANCE SAVE RESPONSE]');
-      print('STATUS CODE: ${response.statusCode}');
-      print('RAW RESPONSE DATA: ${jsonEncode(response.data)}');
-      print('================================================================');
       debugPrint(
         '📥 [DAILY ATTENDANCE SAVE RESPONSE] STATUS: ${response.statusCode} DATA: ${jsonEncode(response.data)}',
       );
@@ -509,14 +478,6 @@ class DailyAttendanceService {
         rawResponse: response.data,
       );
     } on DioException catch (dioErr) {
-      print('================================================================');
-      print('❌ [DAILY ATTENDANCE SAVE DIO ERROR]');
-      print('ERROR: $dioErr');
-      print('STATUS CODE: ${dioErr.response?.statusCode}');
-      print(
-        'RESPONSE DATA: ${dioErr.response?.data != null ? jsonEncode(dioErr.response?.data) : "null"}',
-      );
-      print('================================================================');
       debugPrint('❌ [DAILY ATTENDANCE SAVE DIO ERROR]: $dioErr');
 
       final respData = dioErr.response?.data;
@@ -548,12 +509,7 @@ class DailyAttendanceService {
         errorMessage: dioErr.message ?? 'Network error saving attendance.',
         rawResponse: respData,
       );
-    } catch (e, stack) {
-      print('================================================================');
-      print('❌ [DAILY ATTENDANCE SAVE EXCEPTION]');
-      print('ERROR: $e');
-      print('STACK: $stack');
-      print('================================================================');
+    } catch (e) {
       debugPrint('❌ [DAILY ATTENDANCE SAVE EXCEPTION]: $e');
       return (isSuccess: false, errorMessage: e.toString(), rawResponse: null);
     }

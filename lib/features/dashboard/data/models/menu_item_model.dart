@@ -46,7 +46,8 @@ class MenuItemModel {
         lower.contains('expense')) {
       return MenuModuleType.claim;
     }
-    if (value == 5102 ||
+    if (value == 5106 ||
+        value == 5102 ||
         lower.contains('cancellation') ||
         (lower.contains('leave') && lower.contains('cancel'))) {
       return MenuModuleType.leaveCancellation;

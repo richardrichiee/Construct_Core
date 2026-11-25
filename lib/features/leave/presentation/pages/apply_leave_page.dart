@@ -163,13 +163,15 @@ class _ApplyLeavePageState extends State<ApplyLeavePage> {
                           ? const Color(0xFF1E88E5)
                           : const Color(0xFF7C3AED));
 
-                  final hasKnownBalance = b.closing >= 0;
+                  final hasKnownBalance = !b.isLossOfPay && b.closing >= 0;
                   final val = b.closing < 0 ? 0.0 : b.closing;
-                  final balanceText = !hasKnownBalance
-                      ? ''
-                      : ((val % 1 == 0)
-                          ? '${val.toInt()} ${val == 1 ? "Day" : "Days"}'
-                          : '$val Days');
+                  final balanceText = b.isLossOfPay
+                      ? 'Unpaid'
+                      : (!hasKnownBalance
+                            ? ''
+                            : ((val % 1 == 0)
+                                  ? '${val.toInt()} ${val == 1 ? "Day" : "Days"}'
+                                  : '$val Days'));
 
                   final formattedTitle = b.leaveName.split(' ').map((word) {
                     if (word.isEmpty) return word;
@@ -186,7 +188,9 @@ class _ApplyLeavePageState extends State<ApplyLeavePage> {
                       onTap: () => _openApplyLeaveModal(
                         leaveId: b.leaveId.toString(),
                         leaveName: formattedTitle,
-                        balance: b.closing >= 0 ? b.closing : null,
+                        balance: (!b.isLossOfPay && b.closing >= 0)
+                            ? b.closing
+                            : null,
                       ),
                     ),
                   );

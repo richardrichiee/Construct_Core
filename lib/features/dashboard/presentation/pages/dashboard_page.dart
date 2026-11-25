@@ -20,12 +20,16 @@ import '../../data/services/branch_service.dart';
 import '../../data/services/financial_year_service.dart';
 import '../../data/services/menu_service.dart';
 import '../../data/services/notification_service.dart';
+import '../../../leave/data/models/leave_application_model.dart';
 import '../../../leave/data/services/leave_service.dart';
+import '../../../auth/data/models/user_rights_model.dart';
 import '../../../auth/data/services/access_point_service.dart';
+import '../../../auth/data/services/user_rights_service.dart';
 import '../widgets/attendance_calendar_widget.dart';
 import '../widgets/dashboard_metrics.dart';
 import '../widgets/leave_balance_chart.dart';
 import '../widgets/today_punch_history_sheet.dart';
+import '../../../settings/presentation/widgets/branch_location_sheet.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -41,10 +45,13 @@ class _DashboardPageState extends State<DashboardPage> {
   final _attendanceService = AttendanceService();
   final _notificationService = NotificationService();
   final _menuService = MenuService();
+  final _userRightsService = UserRightsService();
 
   bool _isCheckedIn = false;
   bool _isLocationChecking = false;
   bool _isMenuLoading = true;
+  bool _canViewLeave = false;
+  bool _canViewClaims = false;
   bool _hasResolvedUser = false;
   bool _hasLinkedEmployee = false;
   List<MenuItemModel> _menuItems = [];
@@ -142,10 +149,36 @@ class _DashboardPageState extends State<DashboardPage> {
         if (prefetchedBranches.isNotEmpty) {
           resolvedBranchId = prefetchedBranches.first.id;
           await LocalStorageService.saveSelectedBranchId(resolvedBranchId);
+          final existingDefault =
+              await LocalStorageService.getUserDefaultBranchId();
+          if (existingDefault == null || existingDefault <= 0) {
+            await LocalStorageService.saveUserDefaultBranchId(resolvedBranchId);
+            await LocalStorageService.saveUserDefaultBranchName(
+              prefetchedBranches.first.name,
+            );
+          }
         }
       } catch (_) {}
     }
     final branchId = resolvedBranchId ?? 1;
+
+    final punchAnywhereFlag =
+        await LocalStorageService.getOnlinePunchAnywhere();
+    final canPunchAnywhere =
+        (user?.canPunchAnywhere ?? false) || punchAnywhereFlag == 1;
+    final effectiveHomeBranchId =
+        await LocalStorageService.getEffectiveUserBranchId();
+    final punchBranchId = (!canPunchAnywhere && effectiveHomeBranchId > 0)
+        ? effectiveHomeBranchId
+        : branchId;
+    final leaveMenuCode = await LocalStorageService.getMenuCodeForModule(
+      MenuModuleType.leave,
+      fallback: 5105,
+    );
+    final claimMenuCode = await LocalStorageService.getMenuCodeForModule(
+      MenuModuleType.claim,
+      fallback: 5121,
+    );
 
     // 2. Fetch all dashboard data concurrently in parallel using Future.wait
     try {
@@ -161,14 +194,23 @@ class _DashboardPageState extends State<DashboardPage> {
             : Future.value(_financialYears),
         _attendanceService.fetchMonthlyAttendanceLogs(date: formattedDate),
         _attendanceService.fetchLastAttendance(
-          branchId: branchId,
+          branchId: punchBranchId,
           employeeId: empId,
         ),
         _attendanceService.fetchHistoryAttendance(
-          branchId: branchId,
+          branchId: punchBranchId,
           employeeId: empId,
         ),
         _menuService.fetchMenus(),
+        leaveService.fetchLeaveApplications(),
+        _userRightsService.fetchUserRights(
+          menuCode: leaveMenuCode,
+          branchId: effectiveHomeBranchId,
+        ),
+        _userRightsService.fetchUserRights(
+          menuCode: claimMenuCode,
+          branchId: effectiveHomeBranchId,
+        ),
       ]);
 
       if (!mounted) return;
@@ -186,6 +228,41 @@ class _DashboardPageState extends State<DashboardPage> {
       final menus = (results.length > 8 && results[8] is List<MenuItemModel>)
           ? results[8] as List<MenuItemModel>
           : <MenuItemModel>[];
+      final allLeaveApps =
+          (results.length > 9 && results[9] is List<LeaveApplicationModel>)
+              ? results[9] as List<LeaveApplicationModel>
+              : <LeaveApplicationModel>[];
+      var leaveRights =
+          (results.length > 10 && results[10] is UserRightsModel)
+              ? results[10] as UserRightsModel
+              : UserRightsModel.noAccess();
+      var claimsRights =
+          (results.length > 11 && results[11] is UserRightsModel)
+              ? results[11] as UserRightsModel
+              : UserRightsModel.noAccess();
+
+      // If menus were empty before fetch (e.g. fresh login) and the server
+      // returned different menu codes for Leave or Claims, re-check rights.
+      final resolvedLeaveMenuCode = await LocalStorageService.getMenuCodeForModule(
+        MenuModuleType.leave,
+        fallback: leaveMenuCode,
+      );
+      final resolvedClaimMenuCode = await LocalStorageService.getMenuCodeForModule(
+        MenuModuleType.claim,
+        fallback: claimMenuCode,
+      );
+      if (resolvedLeaveMenuCode != leaveMenuCode) {
+        leaveRights = await _userRightsService.fetchUserRights(
+          menuCode: resolvedLeaveMenuCode,
+          branchId: effectiveHomeBranchId,
+        );
+      }
+      if (resolvedClaimMenuCode != claimMenuCode) {
+        claimsRights = await _userRightsService.fetchUserRights(
+          menuCode: resolvedClaimMenuCode,
+          branchId: effectiveHomeBranchId,
+        );
+      }
 
       // Determine final selected branch
       BranchModel? finalSelectedBranch = _selectedBranch;
@@ -241,6 +318,50 @@ class _DashboardPageState extends State<DashboardPage> {
 
       if (!mounted) return;
 
+      final currentUserName =
+          (employeeDetails != null && employeeDetails.name.isNotEmpty)
+              ? employeeDetails.name
+              : (user?.userName ?? '');
+
+      // Filter only current user's approved leave applications
+      final myApprovedLeaves = allLeaveApps.where((app) {
+        return _isCurrentUser(app.employee, currentUserName) && app.isApproved;
+      }).toList();
+
+      // Filter approved leaves for the current selected month & year
+      final myApprovedLeavesThisMonth = myApprovedLeaves.where((app) {
+        final leaveDate = _parseLeaveFromDate(app.fromDate);
+        return leaveDate != null &&
+            leaveDate.year == _selectedDate.year &&
+            leaveDate.month == _selectedDate.month;
+      }).toList();
+
+      // Calculate days taken for the current selected month only per leave type
+      double calculateTakenThisMonth(String leaveName) {
+        final target = leaveName.trim().toLowerCase();
+        return myApprovedLeavesThisMonth.where((app) {
+          final appName = app.leaveName.trim().toLowerCase();
+          return appName == target ||
+              appName.contains(target) ||
+              target.contains(appName);
+        }).fold(0.0, (sum, app) => sum + app.noOfLeaves);
+      }
+
+      // Calculate dynamic approved leaves for the selected month/year
+      final double dynamicLeavesThisMonth = myApprovedLeavesThisMonth.fold(
+        0.0,
+        (sum, app) => sum + app.noOfLeaves,
+      );
+
+      final serverLeaves =
+          (employeeDetails?.noOfLeavesForTheMonth ?? 0).toDouble();
+      final finalLeavesCount = (dynamicLeavesThisMonth > 0 &&
+              (serverLeaves == 0 ||
+                  (serverLeaves % 1 == 0 && dynamicLeavesThisMonth % 1 != 0) ||
+                  dynamicLeavesThisMonth > serverLeaves))
+          ? dynamicLeavesThisMonth
+          : (serverLeaves > 0 ? serverLeaves : dynamicLeavesThisMonth);
+
       final summaryItems = <LeaveSummaryItem>[];
       final distinctColors = [
         const Color(0xFFB06A44), // Warm Bronze
@@ -260,12 +381,17 @@ class _DashboardPageState extends State<DashboardPage> {
           final color = distinctColors[colorIdx % distinctColors.length];
           colorIdx++;
 
+          final balance =
+              (bal.isLossOfPay || bal.closing < 0) ? 0.0 : bal.closing;
+          final taken = calculateTakenThisMonth(name);
+          final total = bal.isLossOfPay ? 0.0 : (balance + taken);
+
           summaryItems.add(
             LeaveSummaryItem(
               leaveName: name,
-              totalLeaves: bal.opening > 0 ? bal.opening : bal.closing,
-              employeesTaken: bal.taken,
-              balanceLeaves: bal.closing,
+              totalLeaves: total,
+              employeesTaken: taken,
+              balanceLeaves: balance,
               color: color,
             ),
           );
@@ -273,19 +399,29 @@ class _DashboardPageState extends State<DashboardPage> {
       } else if (dashboardLeaves.isNotEmpty) {
         for (final item in dashboardLeaves) {
           final name = item['LeaveName']?.toString() ?? 'Leave';
-          final empCount =
-              (item['EmployeesTakenLeave'] as num?)?.toDouble() ?? 0.0;
-          final totalDays = (item['TotalLeaveDays'] as num?)?.toDouble() ?? 0.0;
-          final days = totalDays > 0 ? totalDays : empCount;
+          final lower = name.trim().toLowerCase();
+          if (lower.contains('loss of pay') ||
+              lower == 'lop' ||
+              lower.contains('(lop)') ||
+              lower.contains('l.o.p') ||
+              lower.contains('lossofpay') ||
+              lower.contains('unpaid')) {
+            continue;
+          }
+          final taken = calculateTakenThisMonth(name);
+          final total =
+              (item['EmployeesTakenLeave'] as num?)?.toDouble() ?? 10.0;
+          final opening = total > 0 ? total : 10.0;
+          final balance = (opening - taken) >= 0 ? (opening - taken) : 0.0;
           final color = distinctColors[colorIdx % distinctColors.length];
           colorIdx++;
 
           summaryItems.add(
             LeaveSummaryItem(
               leaveName: name,
-              totalLeaves: days,
-              employeesTaken: empCount,
-              balanceLeaves: days,
+              totalLeaves: opening,
+              employeesTaken: taken,
+              balanceLeaves: balance,
               color: color,
             ),
           );
@@ -296,13 +432,15 @@ class _DashboardPageState extends State<DashboardPage> {
         _notificationCount = notifCount;
         _leaveSummaryItems = summaryItems;
         _menuItems = menus;
+        _canViewLeave = leaveRights.viewRight;
+        _canViewClaims = claimsRights.viewRight;
         _isMenuLoading = false;
 
         if (employeeDetails != null) {
           _userName = employeeDetails.name;
           _userDesignation = employeeDetails.designation;
           _attendanceCount = employeeDetails.attendanceForTheMonth;
-          _leavesCount = employeeDetails.noOfLeavesForTheMonth;
+          _leavesCount = finalLeavesCount;
         } else if (user != null && _userName.isEmpty) {
           _userName = user.userName;
         }
@@ -420,7 +558,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
         if (employeeDetails != null) {
           _attendanceCount = employeeDetails.attendanceForTheMonth;
-          _leavesCount = employeeDetails.noOfLeavesForTheMonth;
+          _leavesCount = finalLeavesCount;
         } else {
           _attendanceCount = pCount;
         }
@@ -447,11 +585,14 @@ class _DashboardPageState extends State<DashboardPage> {
 
       // Current checked-in status is determined by the most recent punch overall
       final sortedAll = List<LastAttendanceModel>.from(history)
-        ..sort(
-          (a, b) => _parseTimeToSeconds(
-            b.inOutTime,
-          ).compareTo(_parseTimeToSeconds(a.inOutTime)),
-        );
+        ..sort((a, b) {
+          final timeA = _parseTimeToSeconds(a.inOutTime);
+          final timeB = _parseTimeToSeconds(b.inOutTime);
+          if (timeB != timeA) {
+            return timeB.compareTo(timeA);
+          }
+          return b.timeFlag.compareTo(a.timeFlag); // Tie-breaker: flag 1 (OUT) > flag 0 (IN)
+        });
       final latestPunch = sortedAll.first;
       _isCheckedIn = latestPunch.isCheckedIn;
 
@@ -503,33 +644,6 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  Future<void> _fetchAndApplyLastAttendance() async {
-    final currentBranch = _selectedBranch;
-    if (currentBranch == null) return;
-    try {
-      final user = await LocalStorageService.getUser();
-      final results = await Future.wait([
-        _attendanceService.fetchLastAttendance(
-          branchId: currentBranch.id,
-          employeeId: user?.employeeId,
-        ),
-        _attendanceService.fetchHistoryAttendance(
-          branchId: currentBranch.id,
-          employeeId: user?.employeeId,
-        ),
-      ]);
-      if (!mounted) return;
-      final last = results[0] as LastAttendanceModel?;
-      final history = (results[1] is List)
-          ? results[1] as List<LastAttendanceModel>
-          : <LastAttendanceModel>[];
-
-      setState(() {
-        _applyAttendanceFromHistory(history, last);
-      });
-    } catch (_) {}
-  }
-
   Future<void> _showTodayPunchHistory() async {
     final currentBranch = _selectedBranch;
     if (currentBranch == null) return;
@@ -542,9 +656,20 @@ class _DashboardPageState extends State<DashboardPage> {
         return FutureBuilder<List<LastAttendanceModel>>(
           future: () async {
             final user = await LocalStorageService.getUser();
+            final punchAnywhereFlag =
+                await LocalStorageService.getOnlinePunchAnywhere();
+            final canPunchAnywhere =
+                (user?.canPunchAnywhere ?? false) || punchAnywhereFlag == 1;
+            final effectiveHomeBranchId =
+                await LocalStorageService.getEffectiveUserBranchId();
+            final targetBranchId =
+                (!canPunchAnywhere && effectiveHomeBranchId > 0)
+                    ? effectiveHomeBranchId
+                    : currentBranch.id;
+
             final serverHistory = await _attendanceService
                 .fetchHistoryAttendance(
-                  branchId: currentBranch.id,
+                  branchId: targetBranchId,
                   employeeId: user?.employeeId,
                 );
 
@@ -606,6 +731,49 @@ class _DashboardPageState extends State<DashboardPage> {
     return 0;
   }
 
+  static DateTime? _parseLeaveFromDate(String rawDate) {
+    final trimmed = rawDate.trim();
+    if (trimmed.isEmpty) return null;
+    try {
+      final parts = trimmed.split('/');
+      if (parts.length == 3) {
+        return DateTime(
+          int.parse(parts[2]),
+          int.parse(parts[1]),
+          int.parse(parts[0]),
+        );
+      }
+      return DateTime.tryParse(trimmed);
+    } catch (_) {
+      return DateTime.tryParse(trimmed);
+    }
+  }
+
+  static bool _isCurrentUser(String employeeName, String currentUserName) {
+    if (currentUserName.trim().isEmpty) return true;
+    final empTrim = employeeName.trim();
+    if (empTrim.isEmpty || empTrim.toLowerCase() == 'employee') {
+      return true;
+    }
+    final cleanEmp = empTrim.replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+    final cleanUser = currentUserName
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .toLowerCase();
+    if (cleanEmp.isEmpty || cleanUser.isEmpty) return true;
+    if (cleanEmp == cleanUser ||
+        cleanEmp.contains(cleanUser) ||
+        cleanUser.contains(cleanEmp)) {
+      return true;
+    }
+    final userTokens = cleanUser.split(' ').where((t) => t.isNotEmpty);
+    final empTokens = cleanEmp.split(' ').where((t) => t.isNotEmpty);
+    for (final ut in userTokens) {
+      if (empTokens.contains(ut)) return true;
+    }
+    return false;
+  }
+
   Future<void> _selectDashboardDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -641,7 +809,10 @@ class _DashboardPageState extends State<DashboardPage> {
       return;
     }
 
-    // Refresh branch data from local storage to ensure fresh coordinates
+    setState(() => _isLocationChecking = true);
+
+    try {
+      // Refresh branch data from local storage to ensure fresh coordinates
     final user = await LocalStorageService.getUser();
     if ((user?.employeeId ?? 0) <= 0) {
       _showLocationDialog(
@@ -662,24 +833,47 @@ class _DashboardPageState extends State<DashboardPage> {
       '[CheckIn] OnlinePunchAnywhere: $punchAnywhereFlag, canPunchAnywhere: $canPunchAnywhere',
     );
 
+    final effectiveHomeBranchId =
+        await LocalStorageService.getEffectiveUserBranchId();
+    final effectiveHomeBranchName =
+        await LocalStorageService.getEffectiveUserBranchName();
+
     final savedBranchId =
         await LocalStorageService.getSelectedBranchId() ??
         _selectedBranch?.value ??
         1;
     final cachedBranches = await LocalStorageService.getBranches();
     BranchModel? branch;
-    try {
-      branch = cachedBranches.firstWhere((b) => b.value == savedBranchId);
-    } catch (_) {
-      branch = _selectedBranch;
-    }
+    if (!canPunchAnywhere && effectiveHomeBranchId > 0) {
+      try {
+        branch = cachedBranches.firstWhere(
+          (b) => b.value == effectiveHomeBranchId,
+        );
+      } catch (_) {
+        branch = BranchModel(
+          value: effectiveHomeBranchId,
+          name: effectiveHomeBranchName.isNotEmpty
+              ? effectiveHomeBranchName
+              : 'Home Branch',
+        );
+      }
+      debugPrint(
+        '[CheckIn] Locked to Dedicated Home Branch: ${branch.name} (ID: ${branch.id})',
+      );
+    } else {
+      try {
+        branch = cachedBranches.firstWhere((b) => b.value == savedBranchId);
+      } catch (_) {
+        branch = _selectedBranch;
+      }
 
-    branch ??= (cachedBranches.isNotEmpty
-        ? cachedBranches.first
-        : _selectedBranch);
+      branch ??= (cachedBranches.isNotEmpty
+          ? cachedBranches.first
+          : _selectedBranch);
 
-    if (branch != null) {
-      _selectedBranch = branch;
+      if (branch != null) {
+        _selectedBranch = branch;
+      }
     }
 
     debugPrint('[CheckIn] Saved Branch ID: $savedBranchId');
@@ -703,6 +897,8 @@ class _DashboardPageState extends State<DashboardPage> {
           message: 'Branch location coordinates are not configured.',
           icon: Icons.location_off_rounded,
           iconColor: AppColors.error,
+          actionLabel: 'Configure Location',
+          onAction: () => BranchLocationSheet.show(context),
         );
         return;
       }
@@ -716,12 +912,9 @@ class _DashboardPageState extends State<DashboardPage> {
       );
     }
 
-    setState(() => _isLocationChecking = true);
+    Position? position;
 
-    try {
-      Position? position;
-
-      if (!canPunchAnywhere) {
+    if (!canPunchAnywhere) {
         debugPrint('[CheckIn] Checking if device GPS service is enabled...');
         bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
         debugPrint('[CheckIn] GPS service enabled: $serviceEnabled');
@@ -1183,7 +1376,6 @@ class _DashboardPageState extends State<DashboardPage> {
               _selectedBranch = branch;
             });
             LocalStorageService.saveSelectedBranchId(branch.value);
-            _fetchAndApplyLastAttendance();
           },
           onFinancialYearSelected: (fy) {
             setState(() {
@@ -1203,34 +1395,129 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget build(BuildContext context) {
     final now = DateTime.now();
     final todayDetails = _liveDayDetails[now.day];
-    final serverTodayInTime = todayDetails?['inTime'];
-    final serverTodayOutTime = todayDetails?['outTime'];
+    final serverTodayInTime = todayDetails?['inTime']?.trim() ?? '';
+    final serverTodayOutTime = todayDetails?['outTime']?.trim() ?? '';
+    final serverTodayPresent = todayDetails?['present']?.trim() ?? '';
 
-    final todayInTime = (_checkInTime.isNotEmpty && _checkInTime != '--:--')
+    bool isValidClockTime(String? time) {
+      if (time == null) return false;
+      final t = time.trim();
+      if (t.isEmpty ||
+          t == '--:--' ||
+          t == '00:00' ||
+          t == '0:00' ||
+          t.toLowerCase() == 'null') {
+        return false;
+      }
+      return RegExp(r'\d{1,2}:\d{2}').hasMatch(t);
+    }
+
+    // Only actual clock times (e.g. 09:30 AM, 18:00)
+    final validInTime = isValidClockTime(_checkInTime)
         ? _checkInTime
-        : (serverTodayInTime != null &&
-              serverTodayInTime.isNotEmpty &&
-              serverTodayInTime != '--:--' &&
-              serverTodayInTime != '00:00' &&
-              serverTodayInTime != 'CL' &&
-              serverTodayInTime != 'SL' &&
-              serverTodayInTime != 'PL' &&
-              serverTodayInTime != 'AB')
-        ? serverTodayInTime
-        : '--:--';
+        : (isValidClockTime(serverTodayInTime) ? serverTodayInTime : '');
 
-    final todayOutTime = (_checkOutTime.isNotEmpty && _checkOutTime != '--:--')
+    final validOutTime = isValidClockTime(_checkOutTime)
         ? _checkOutTime
-        : (serverTodayOutTime != null &&
-              serverTodayOutTime.isNotEmpty &&
-              serverTodayOutTime != '--:--' &&
-              serverTodayOutTime != '00:00' &&
-              serverTodayOutTime != 'CL' &&
-              serverTodayOutTime != 'SL' &&
-              serverTodayOutTime != 'PL' &&
-              serverTodayOutTime != 'AB')
-        ? serverTodayOutTime
-        : '';
+        : (isValidClockTime(serverTodayOutTime) ? serverTodayOutTime : '');
+
+    // Check for special attendance status (Leave, Absent, Holiday, etc.)
+    final rawStatusCode = (serverTodayPresent.isNotEmpty &&
+            !isValidClockTime(serverTodayPresent))
+        ? serverTodayPresent
+        : ((serverTodayInTime.isNotEmpty &&
+                !isValidClockTime(serverTodayInTime))
+            ? serverTodayInTime
+            : ((serverTodayOutTime.isNotEmpty &&
+                    !isValidClockTime(serverTodayOutTime))
+                ? serverTodayOutTime
+                : ''));
+
+    final upperStatus = rawStatusCode.trim().toUpperCase();
+    final isLeaveStatus = upperStatus == 'LOP' ||
+        upperStatus == 'CL' ||
+        upperStatus == 'SL' ||
+        upperStatus == 'PL' ||
+        upperStatus == 'EL' ||
+        upperStatus == 'HD' ||
+        upperStatus == 'HL' ||
+        upperStatus == 'L' ||
+        upperStatus == 'CO';
+
+    final isAbsentStatus = upperStatus == 'AB' ||
+        upperStatus == 'A' ||
+        upperStatus == 'ABSENT';
+
+    final isWeekendOrHoliday = upperStatus == 'SUN' ||
+        upperStatus == 'WO' ||
+        upperStatus == 'H' ||
+        upperStatus == 'HOLIDAY' ||
+        upperStatus == 'OFF';
+
+    String formatSpecialStatus(String code) {
+      switch (code) {
+        case 'LOP':
+          return 'Loss of Pay (LOP)';
+        case 'CL':
+          return 'Casual Leave (CL)';
+        case 'SL':
+          return 'Sick Leave (SL)';
+        case 'PL':
+          return 'Paid Leave (PL)';
+        case 'EL':
+          return 'Earned Leave (EL)';
+        case 'HD':
+        case 'HL':
+          return 'Half Day Leave';
+        case 'CO':
+          return 'Comp Off';
+        case 'AB':
+        case 'A':
+        case 'ABSENT':
+          return 'Absent';
+        case 'SUN':
+          return 'Sunday';
+        case 'WO':
+          return 'Weekly Off';
+        case 'H':
+        case 'HOLIDAY':
+          return 'Holiday';
+        case 'OD':
+          return 'On Duty';
+        default:
+          return code;
+      }
+    }
+
+    final String statusLabel;
+    final String statusValue;
+    final Color dotColor;
+
+    if (_isCheckedIn) {
+      statusLabel = "Today's Check In";
+      statusValue = validInTime.isNotEmpty ? validInTime : '--:--';
+      dotColor = AppColors.secondary;
+    } else if (validOutTime.isNotEmpty) {
+      statusLabel = "Today's Check Out";
+      statusValue = validOutTime;
+      dotColor = Colors.orange;
+    } else if (isLeaveStatus) {
+      statusLabel = "Today's Status";
+      statusValue = formatSpecialStatus(upperStatus);
+      dotColor = const Color(0xFFF59E0B);
+    } else if (isAbsentStatus) {
+      statusLabel = "Today's Status";
+      statusValue = "Absent";
+      dotColor = AppColors.error;
+    } else if (isWeekendOrHoliday) {
+      statusLabel = "Today's Status";
+      statusValue = formatSpecialStatus(upperStatus);
+      dotColor = AppColors.textMuted;
+    } else {
+      statusLabel = "Today's Check In";
+      statusValue = validInTime.isNotEmpty ? validInTime : '--:--';
+      dotColor = AppColors.textMuted;
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -1555,11 +1842,21 @@ class _DashboardPageState extends State<DashboardPage> {
                       )
                     else
                       ..._menuItems
-                          .where(
-                            (m) =>
-                                m.moduleType !=
-                                MenuModuleType.leaveCancellation,
-                          )
+                          .where((m) {
+                            if (m.moduleType ==
+                                MenuModuleType.leaveCancellation) {
+                              return false;
+                            }
+                            if (m.moduleType == MenuModuleType.leave &&
+                                !_canViewLeave) {
+                              return false;
+                            }
+                            if (m.moduleType == MenuModuleType.claim &&
+                                !_canViewClaims) {
+                              return false;
+                            }
+                            return true;
+                          })
                           .map(_buildDynamicMenuTile),
                     if (!_menuItems.any(
                       (m) => m.moduleType == MenuModuleType.attendance,
@@ -1763,22 +2060,14 @@ class _DashboardPageState extends State<DashboardPage> {
                                             width: 7,
                                             height: 7,
                                             decoration: BoxDecoration(
-                                              color: _isCheckedIn
-                                                  ? AppColors.secondary
-                                                  : (todayOutTime.isNotEmpty
-                                                        ? Colors.orange
-                                                        : AppColors.textMuted),
+                                              color: dotColor,
                                               shape: BoxShape.circle,
                                             ),
                                           ),
                                           const SizedBox(width: 6),
                                           Flexible(
                                             child: Text(
-                                              _isCheckedIn
-                                                  ? "Today's Check In"
-                                                  : (todayOutTime.isNotEmpty
-                                                        ? "Today's Check Out"
-                                                        : "Today's Check In"),
+                                              statusLabel,
                                               style: const TextStyle(
                                                 fontSize: 12,
                                                 fontWeight: FontWeight.w600,
@@ -1793,11 +2082,7 @@ class _DashboardPageState extends State<DashboardPage> {
                                         fit: BoxFit.scaleDown,
                                         alignment: Alignment.centerLeft,
                                         child: Text(
-                                          _isCheckedIn
-                                              ? todayInTime
-                                              : (todayOutTime.isNotEmpty
-                                                    ? todayOutTime
-                                                    : todayInTime),
+                                          statusValue,
                                           maxLines: 1,
                                           style: const TextStyle(
                                             fontSize: 24,
@@ -1994,7 +2279,10 @@ class _DashboardPageState extends State<DashboardPage> {
                       const SizedBox(height: 16),
 
                       // 6. Leave Balance Overview (Donut Chart / Table View)
-                      LeaveBalanceChart(items: _leaveSummaryItems),
+                      LeaveBalanceChart(
+                        items: _leaveSummaryItems,
+                        showApplyLeave: _canViewLeave,
+                      ),
                       const SizedBox(height: 24),
                     ],
                   ],
@@ -2037,9 +2325,31 @@ class _DashboardPageState extends State<DashboardPage> {
   Future<void> _refreshMenus() async {
     setState(() => _isMenuLoading = true);
     final menus = await _menuService.fetchMenus();
+    final effectiveHomeBranchId =
+        await LocalStorageService.getEffectiveUserBranchId();
+    final leaveMenuCode = await LocalStorageService.getMenuCodeForModule(
+      MenuModuleType.leave,
+      fallback: 5105,
+    );
+    final claimMenuCode = await LocalStorageService.getMenuCodeForModule(
+      MenuModuleType.claim,
+      fallback: 5121,
+    );
+    final rightsResults = await Future.wait([
+      _userRightsService.fetchUserRights(
+        menuCode: leaveMenuCode,
+        branchId: effectiveHomeBranchId,
+      ),
+      _userRightsService.fetchUserRights(
+        menuCode: claimMenuCode,
+        branchId: effectiveHomeBranchId,
+      ),
+    ]);
     if (mounted) {
       setState(() {
         _menuItems = menus;
+        _canViewLeave = rightsResults[0].viewRight;
+        _canViewClaims = rightsResults[1].viewRight;
         _isMenuLoading = false;
       });
     }

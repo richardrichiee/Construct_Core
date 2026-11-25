@@ -22,7 +22,9 @@ import '../../data/services/menu_service.dart';
 import '../../data/services/notification_service.dart';
 import '../../../leave/data/models/leave_application_model.dart';
 import '../../../leave/data/services/leave_service.dart';
+import '../../../auth/data/models/user_rights_model.dart';
 import '../../../auth/data/services/access_point_service.dart';
+import '../../../auth/data/services/user_rights_service.dart';
 import '../widgets/attendance_calendar_widget.dart';
 import '../widgets/dashboard_metrics.dart';
 import '../widgets/leave_balance_chart.dart';
@@ -43,10 +45,13 @@ class _DashboardPageState extends State<DashboardPage> {
   final _attendanceService = AttendanceService();
   final _notificationService = NotificationService();
   final _menuService = MenuService();
+  final _userRightsService = UserRightsService();
 
   bool _isCheckedIn = false;
   bool _isLocationChecking = false;
   bool _isMenuLoading = true;
+  bool _canViewLeave = false;
+  bool _canViewClaims = false;
   bool _hasResolvedUser = false;
   bool _hasLinkedEmployee = false;
   List<MenuItemModel> _menuItems = [];
@@ -166,6 +171,14 @@ class _DashboardPageState extends State<DashboardPage> {
     final punchBranchId = (!canPunchAnywhere && effectiveHomeBranchId > 0)
         ? effectiveHomeBranchId
         : branchId;
+    final leaveMenuCode = await LocalStorageService.getMenuCodeForModule(
+      MenuModuleType.leave,
+      fallback: 5105,
+    );
+    final claimMenuCode = await LocalStorageService.getMenuCodeForModule(
+      MenuModuleType.claim,
+      fallback: 5121,
+    );
 
     // 2. Fetch all dashboard data concurrently in parallel using Future.wait
     try {
@@ -190,6 +203,14 @@ class _DashboardPageState extends State<DashboardPage> {
         ),
         _menuService.fetchMenus(),
         leaveService.fetchLeaveApplications(),
+        _userRightsService.fetchUserRights(
+          menuCode: leaveMenuCode,
+          branchId: effectiveHomeBranchId,
+        ),
+        _userRightsService.fetchUserRights(
+          menuCode: claimMenuCode,
+          branchId: effectiveHomeBranchId,
+        ),
       ]);
 
       if (!mounted) return;
@@ -211,6 +232,37 @@ class _DashboardPageState extends State<DashboardPage> {
           (results.length > 9 && results[9] is List<LeaveApplicationModel>)
               ? results[9] as List<LeaveApplicationModel>
               : <LeaveApplicationModel>[];
+      var leaveRights =
+          (results.length > 10 && results[10] is UserRightsModel)
+              ? results[10] as UserRightsModel
+              : UserRightsModel.noAccess();
+      var claimsRights =
+          (results.length > 11 && results[11] is UserRightsModel)
+              ? results[11] as UserRightsModel
+              : UserRightsModel.noAccess();
+
+      // If menus were empty before fetch (e.g. fresh login) and the server
+      // returned different menu codes for Leave or Claims, re-check rights.
+      final resolvedLeaveMenuCode = await LocalStorageService.getMenuCodeForModule(
+        MenuModuleType.leave,
+        fallback: leaveMenuCode,
+      );
+      final resolvedClaimMenuCode = await LocalStorageService.getMenuCodeForModule(
+        MenuModuleType.claim,
+        fallback: claimMenuCode,
+      );
+      if (resolvedLeaveMenuCode != leaveMenuCode) {
+        leaveRights = await _userRightsService.fetchUserRights(
+          menuCode: resolvedLeaveMenuCode,
+          branchId: effectiveHomeBranchId,
+        );
+      }
+      if (resolvedClaimMenuCode != claimMenuCode) {
+        claimsRights = await _userRightsService.fetchUserRights(
+          menuCode: resolvedClaimMenuCode,
+          branchId: effectiveHomeBranchId,
+        );
+      }
 
       // Determine final selected branch
       BranchModel? finalSelectedBranch = _selectedBranch;
@@ -276,12 +328,18 @@ class _DashboardPageState extends State<DashboardPage> {
         return _isCurrentUser(app.employee, currentUserName) && app.isApproved;
       }).toList();
 
-      // Dynamic calculation: calculate days taken from approved leave applications
-      // if the server's monthly ledger has not yet been processed (serverTaken == 0).
-      double calculateTaken(String leaveName, double serverTaken) {
-        if (serverTaken > 0) return serverTaken;
+      // Filter approved leaves for the current selected month & year
+      final myApprovedLeavesThisMonth = myApprovedLeaves.where((app) {
+        final leaveDate = _parseLeaveFromDate(app.fromDate);
+        return leaveDate != null &&
+            leaveDate.year == _selectedDate.year &&
+            leaveDate.month == _selectedDate.month;
+      }).toList();
+
+      // Calculate days taken for the current selected month only per leave type
+      double calculateTakenThisMonth(String leaveName) {
         final target = leaveName.trim().toLowerCase();
-        return myApprovedLeaves.where((app) {
+        return myApprovedLeavesThisMonth.where((app) {
           final appName = app.leaveName.trim().toLowerCase();
           return appName == target ||
               appName.contains(target) ||
@@ -290,30 +348,10 @@ class _DashboardPageState extends State<DashboardPage> {
       }
 
       // Calculate dynamic approved leaves for the selected month/year
-      double dynamicLeavesThisMonth = 0.0;
-      for (final app in myApprovedLeaves) {
-        DateTime? leaveDate;
-        try {
-          final parts = app.fromDate.trim().split('/');
-          if (parts.length == 3) {
-            leaveDate = DateTime(
-              int.parse(parts[2]),
-              int.parse(parts[1]),
-              int.parse(parts[0]),
-            );
-          } else {
-            leaveDate = DateTime.tryParse(app.fromDate.trim());
-          }
-        } catch (_) {
-          leaveDate = DateTime.tryParse(app.fromDate.trim());
-        }
-
-        if (leaveDate != null &&
-            leaveDate.year == _selectedDate.year &&
-            leaveDate.month == _selectedDate.month) {
-          dynamicLeavesThisMonth += app.noOfLeaves;
-        }
-      }
+      final double dynamicLeavesThisMonth = myApprovedLeavesThisMonth.fold(
+        0.0,
+        (sum, app) => sum + app.noOfLeaves,
+      );
 
       final serverLeaves =
           (employeeDetails?.noOfLeavesForTheMonth ?? 0).toDouble();
@@ -339,21 +377,19 @@ class _DashboardPageState extends State<DashboardPage> {
 
       if (employeeDetails != null && employeeDetails.leaveBalances.isNotEmpty) {
         for (final bal in employeeDetails.leaveBalances) {
-          // Exclude Loss of Pay (LOP) from paid leave balance totals/chart
-          // so cancelled LOP never gets added to available leave balances.
-          if (bal.isLossOfPay) continue;
           final name = bal.leaveName;
           final color = distinctColors[colorIdx % distinctColors.length];
           colorIdx++;
 
-          final taken = calculateTaken(name, bal.taken);
-          final opening = bal.opening > 0 ? bal.opening : (bal.closing + taken);
-          final balance = (opening - taken) >= 0 ? (opening - taken) : 0.0;
+          final balance =
+              (bal.isLossOfPay || bal.closing < 0) ? 0.0 : bal.closing;
+          final taken = calculateTakenThisMonth(name);
+          final total = bal.isLossOfPay ? 0.0 : (balance + taken);
 
           summaryItems.add(
             LeaveSummaryItem(
               leaveName: name,
-              totalLeaves: opening,
+              totalLeaves: total,
               employeesTaken: taken,
               balanceLeaves: balance,
               color: color,
@@ -372,7 +408,7 @@ class _DashboardPageState extends State<DashboardPage> {
               lower.contains('unpaid')) {
             continue;
           }
-          final taken = calculateTaken(name, 0.0);
+          final taken = calculateTakenThisMonth(name);
           final total =
               (item['EmployeesTakenLeave'] as num?)?.toDouble() ?? 10.0;
           final opening = total > 0 ? total : 10.0;
@@ -396,6 +432,8 @@ class _DashboardPageState extends State<DashboardPage> {
         _notificationCount = notifCount;
         _leaveSummaryItems = summaryItems;
         _menuItems = menus;
+        _canViewLeave = leaveRights.viewRight;
+        _canViewClaims = claimsRights.viewRight;
         _isMenuLoading = false;
 
         if (employeeDetails != null) {
@@ -691,6 +729,24 @@ class _DashboardPageState extends State<DashboardPage> {
       }
     } catch (_) {}
     return 0;
+  }
+
+  static DateTime? _parseLeaveFromDate(String rawDate) {
+    final trimmed = rawDate.trim();
+    if (trimmed.isEmpty) return null;
+    try {
+      final parts = trimmed.split('/');
+      if (parts.length == 3) {
+        return DateTime(
+          int.parse(parts[2]),
+          int.parse(parts[1]),
+          int.parse(parts[0]),
+        );
+      }
+      return DateTime.tryParse(trimmed);
+    } catch (_) {
+      return DateTime.tryParse(trimmed);
+    }
   }
 
   static bool _isCurrentUser(String employeeName, String currentUserName) {
@@ -1786,11 +1842,21 @@ class _DashboardPageState extends State<DashboardPage> {
                       )
                     else
                       ..._menuItems
-                          .where(
-                            (m) =>
-                                m.moduleType !=
-                                MenuModuleType.leaveCancellation,
-                          )
+                          .where((m) {
+                            if (m.moduleType ==
+                                MenuModuleType.leaveCancellation) {
+                              return false;
+                            }
+                            if (m.moduleType == MenuModuleType.leave &&
+                                !_canViewLeave) {
+                              return false;
+                            }
+                            if (m.moduleType == MenuModuleType.claim &&
+                                !_canViewClaims) {
+                              return false;
+                            }
+                            return true;
+                          })
                           .map(_buildDynamicMenuTile),
                     if (!_menuItems.any(
                       (m) => m.moduleType == MenuModuleType.attendance,
@@ -2213,7 +2279,10 @@ class _DashboardPageState extends State<DashboardPage> {
                       const SizedBox(height: 16),
 
                       // 6. Leave Balance Overview (Donut Chart / Table View)
-                      LeaveBalanceChart(items: _leaveSummaryItems),
+                      LeaveBalanceChart(
+                        items: _leaveSummaryItems,
+                        showApplyLeave: _canViewLeave,
+                      ),
                       const SizedBox(height: 24),
                     ],
                   ],
@@ -2256,9 +2325,31 @@ class _DashboardPageState extends State<DashboardPage> {
   Future<void> _refreshMenus() async {
     setState(() => _isMenuLoading = true);
     final menus = await _menuService.fetchMenus();
+    final effectiveHomeBranchId =
+        await LocalStorageService.getEffectiveUserBranchId();
+    final leaveMenuCode = await LocalStorageService.getMenuCodeForModule(
+      MenuModuleType.leave,
+      fallback: 5105,
+    );
+    final claimMenuCode = await LocalStorageService.getMenuCodeForModule(
+      MenuModuleType.claim,
+      fallback: 5121,
+    );
+    final rightsResults = await Future.wait([
+      _userRightsService.fetchUserRights(
+        menuCode: leaveMenuCode,
+        branchId: effectiveHomeBranchId,
+      ),
+      _userRightsService.fetchUserRights(
+        menuCode: claimMenuCode,
+        branchId: effectiveHomeBranchId,
+      ),
+    ]);
     if (mounted) {
       setState(() {
         _menuItems = menus;
+        _canViewLeave = rightsResults[0].viewRight;
+        _canViewClaims = rightsResults[1].viewRight;
         _isMenuLoading = false;
       });
     }

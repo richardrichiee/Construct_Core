@@ -20,10 +20,11 @@ class BiometricService {
   Future<bool> isBiometricAvailable() async {
     try {
       if (kIsWeb) return false;
-      final bool canCheck = await _auth.canCheckBiometrics;
       final bool supported = await _auth.isDeviceSupported();
-      if (!canCheck && !supported) return false;
+      if (supported) return true;
 
+      final bool canCheck = await _auth.canCheckBiometrics;
+      if (!canCheck) return false;
       final List<BiometricType> enrolled = await _auth.getAvailableBiometrics();
       return enrolled.isNotEmpty;
     } catch (_) {
@@ -40,13 +41,13 @@ class BiometricService {
         return const BiometricAuthResult(
           isSuccess: false,
           errorMessage:
-              'Biometric unlock is not set up on this device. Please enroll a fingerprint or face unlock in phone Settings.',
+              'Device unlock is not set up on this phone. Please set up Face ID, fingerprint, or a device passcode/PIN in Settings.',
         );
       }
 
       final bool didAuthenticate = await _auth.authenticate(
         localizedReason: localizedReason,
-        biometricOnly: true,
+        biometricOnly: false,
         persistAcrossBackgrounding: true,
       );
 
@@ -72,7 +73,7 @@ class BiometricService {
           return const BiometricAuthResult(
             isSuccess: false,
             errorMessage:
-                'No fingerprint or face unlock is enrolled in your phone Settings.',
+                'No biometric or device passcode/PIN is set up in your phone Settings.',
           );
         case LocalAuthExceptionCode.noBiometricHardware:
         case LocalAuthExceptionCode.biometricHardwareTemporarilyUnavailable:
